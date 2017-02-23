@@ -7,6 +7,7 @@
 
 #include <experimental/resumable>
 #include <memory>
+#include <atomic>
 namespace coroutine_tasks {
 namespace ex = std::experimental;
 template<typename>
@@ -87,62 +88,108 @@ struct CallArgsWith {
 }
 
 template<typename T = void>
+struct promise_data;
+template<>
+struct promise_data<void> : public ex::coroutine_handle<void> {
+    promise_data* lock() {
+        if(count_)
+            ++count_;
+        return this;
+    }
+
+    void unlock() {
+        if (count_ > 1)
+            --count_;
+        else {
+            count_ = 0;
+            delete this;
+        }
+        
+    }
+    promise_data(ex::coroutine_handle<> coro) {
+       *static_cast< ex::coroutine_handle<>*>(this) = coro; 
+    }
+    bool resume(){
+	
+	}
+    protected:
+    ~promise_data() = default;
+    std::atomic<int> count_ = 1;
+};
+
+template<typename T>
+struct promise_data : promise_data<void> {
+    promise_data* lock() {
+        if(count_)
+            ++count_;
+        return this;
+    }
+
+    void unlock() {
+        if (count_ > 1)
+            --count_;
+        else {
+            count_ = 0;
+            delete this;
+        }
+        
+    }
+    promise_data(ex::coroutine_handle<T> coro) {
+       *static_cast< ex::coroutine_handle<>*>(this) = coro; 
+    }
+    set_value()
+    protected:
+    ~promise_data() = default;
+    std::atomic<int> count_ = 1;
+};
+
+template<typename T = void>
 class promise_handle;
 
 template<>
 class promise_handle<void> {
   public:
     promise_handle() = default;
+    promise_data<>* lock() {
+        if(handle_)
+            return handle_->lock();
+        return nullptr;
+    }
 
     template<typename V>
     promise_handle(const promise_handle<V>& rhs) noexcept {
-        auto sp = rhs.handle_.lock();
-        if (sp)
-            handle_ = std::atomic_load(&std::dynamic_pointer_cast<ex::coroutine_handle<>>(sp));
-        else
-            handle_.reset();
+        handle_ = rhs.lock();
     }
     template<typename V>
     promise_handle& operator=(const promise_handle<V>& rhs) noexcept {
-        auto sp = rhs.handle_.lock();
-        if (sp)
-            handle_ = std::atomic_load(&std::dynamic_pointer_cast<ex::coroutine_handle<>>(sp));
-        else
-            handle_.reset();
+        if(handle_)
+            handle_->unlock();
+        handle_ = rhs.lock();
     }
     template<typename V>
     promise_handle(promise_handle<V>&& rhs) noexcept {
-        auto sp = rhs.handle_.lock();
-        if (sp)
-            handle_ = std::atomic_load(&std::dynamic_pointer_cast<ex::coroutine_handle<>>(sp));
-        else
-            handle_.reset();
-        rhs.handle_.reset();
+        std::swap(handle_,rhs.handle_);
     }
     template<typename V>
     promise_handle& operator=(promise_handle<V>&& rhs) noexcept {
-        auto sp = rhs.handle_.lock();
-        if (sp)
-            handle_ = std::atomic_load(&std::dynamic_pointer_cast<ex::coroutine_handle<>>(sp));
-        else
-            handle_.reset();
-        rhs.handle_.reset();
+        std::swap(handle_, rhs.handle_);
         return *this;
     }
 
     bool resume() noexcept {
-        auto sp = handle_.lock();
-        if (sp && !sp->done()) {
-            sp->resume();
+        if (valid() && !handle_->done()) {
+            handle_->resume();
             return true;
         }
         return false;
     }
-
-    ~promise_handle() = default;
-
+    bool valid(){return handle_ && handle_->address();}
+    ~promise_handle() {
+        if(handle_)
+            handle_->unlock();
+    }
   protected:
-    std::weak_ptr<ex::coroutine_handle<>> handle_;
+    promise_data<>* handle_ = nullptr;
 };
 
 template<typename T>
@@ -150,17 +197,18 @@ class promise_handle : public promise_handle<> {
   public:
     static promise_handle from_task(task<T>& t) noexcept {
         promise_handle ret;
-        if (!t.self_)
-            t.self_.reset(new decltype(t.coro_)(t.coro_));
-        ret.handle_ = std::atomic_load(&t.self_);
+        if (!t.self_) {
+            t.self_ = new promise_data(t.coro_);
+        }
+        ret.handle_ = t.self_->lock();
         return ret;
     }
 
     promise_handle() = default;
     ~promise_handle() = default;
-    promise_handle(const promise_handle& rhs) noexcept { handle_ = std::atomic_load(&rhs.handle_); }
+    promise_handle(const promise_handle& rhs) noexcept { handle_ = rhs.lock();}
     promise_handle& operator=(const promise_handle& rhs) noexcept {
-        handle_ = std::atomic_load(&rhs.handle_);
+        handle_ = rhs.lock();
     }
     promise_handle(promise_handle&& rhs) noexcept { std::swap(handle_, rhs.handle_); }
     promise_handle& operator=(promise_handle&& rhs) noexcept {
@@ -169,9 +217,8 @@ class promise_handle : public promise_handle<> {
     }
 
     promise<T>* get_promise() {
-        auto sp = handle_.lock();
-        if (sp) {
-            auto hand = std::dynamic_pointer_cast<ex::coroutine_handle<T>>(sp);
+        if (valid()) {
+            auto hand = static_cast<ex::coroutine_handle<T>*>(handle_);
             return &(hand->promise());
         } else {
             return nullptr;
@@ -270,15 +317,17 @@ class task {
     task& operator=(task const&) = delete;
 
     task(task&& rhs) noexcept
-        : coro_(rhs.coro_), self_(std::move(rhs.self_)), self_release_(rhs.self_release_) {
+        : coro_(rhs.coro_), self_(rhs.self_), self_release_(rhs.self_release_) {
         rhs.coro_ = nullptr;
         rhs.self_release_ = false;
+        rhs.self_ = nullptr;
     }
     task& operator=(task&& rhs) noexcept {
         if (&rhs != this) {
             coro_ = rhs.coro_;
             self_release_ = rhs.self_release_;
-            self_ = std::move(rhs.self_);
+            self_ = rhs.self_;
+            rhs.self_ = nullptr;
             rhs.self_release_ = false;
             rhs.coro_ = nullptr;
         }
@@ -289,6 +338,10 @@ class task {
     void reset() noexcept {
         if (coro_) {
             RESUME_TASKS_TRACE("%p destroyed", coro_.address());
+            if(self_) {
+                *static_cast<ex::coroutine_handle<>*>(self_) = nullptr;
+                self_->unlock();
+            }
             coro_.destroy();
             coro_ = nullptr;
         }
@@ -356,7 +409,7 @@ class task {
     friend class scoped_task;
     template<typename>
     friend class promise_handle;
-    std::shared_ptr<ex::coroutine_handle<>> self_;
+    promise_data<>* self_ = nullptr;
 
     bool self_release_ = false;
 

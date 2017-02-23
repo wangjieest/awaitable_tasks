@@ -22,6 +22,15 @@ int main() {
         std::cout << ++g_data << " in func2 " << std::endl;
         return g_data;
     };
+    {
+        auto old_task = coroutine_tasks::make_task();
+        auto old_task_handle = old_task.get_promise_handle();
+        {
+            auto new_task = old_task.then(func).set_self_release();
+        }
+        old_task_handle.resume();
+        //auto v = new_task.cur_value_ref();
+    }
     // empty task then
     {
         auto old_task = coroutine_tasks::make_task();
