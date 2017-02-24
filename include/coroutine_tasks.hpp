@@ -91,13 +91,13 @@ template<typename T = void>
 struct promise_data;
 template<>
 struct promise_data<void> : public ex::coroutine_handle<void> {
-    promise_data* lock() {
+    promise_data* lock() noexcept {
         if (count_)
             ++count_;
         return this;
     }
 
-    void unlock() {
+    void unlock() noexcept {
         if (count_ > 1)
             --count_;
         else {
@@ -130,7 +130,7 @@ struct promise_data : promise_data<void> {
     }
 
   protected:
-    promise<T>* get_promise() {
+    promise<T>* get_promise() noexcept {
         if (valid()) {
             auto hand = static_cast<ex::coroutine_handle<T>*>(this);
             return &(hand->promise());
@@ -148,7 +148,7 @@ template<>
 class promise_handle<void> {
   public:
     promise_handle() = default;
-    promise_data<>* lock() {
+    promise_data<>* lock() noexcept {
         if (handle_)
             return handle_->lock();
         return nullptr;
@@ -174,14 +174,14 @@ class promise_handle<void> {
         return *this;
     }
 
-    bool resume() noexcept {
+    bool resume() {
         if (valid() && !handle_->done()) {
             handle_->resume();
             return true;
         }
         return false;
     }
-    bool valid() { return handle_ && handle_->address(); }
+    bool valid() noexcept { return handle_ && handle_->address(); }
     ~promise_handle() {
         if (handle_)
             handle_->unlock();
@@ -213,7 +213,7 @@ class promise_handle : public promise_handle<> {
         return *this;
     }
 
-    promise<T>* get_promise() {
+    promise<T>* get_promise() noexcept {
         if (valid()) {
             auto hand = static_cast<ex::coroutine_handle<T>*>(handle_);
             return &(hand->promise());
@@ -239,15 +239,15 @@ class promise<void> {
     auto final_suspend() noexcept {
         struct final_awaiter {
             promise* me;
-            bool await_ready() { return false; }
-            void await_suspend(ex::coroutine_handle<>) {
+            bool await_ready() noexcept { return false; }
+            void await_suspend(ex::coroutine_handle<>) noexcept {
                 // if suspend by caller , then resume to it.
                 if (me->caller_coro_) {
                     RESUME_TASKS_TRACE("resumed %p", static_cast<void*>(me));
                     me->caller_coro_.resume();
                 }
             }
-            void await_resume() {}
+            void await_resume() noexcept {}
         };
         return final_awaiter{this};
     }
@@ -273,7 +273,7 @@ class promise : public promise<> {
     }
 
     template<typename U>
-    U&& await_transform(U&& whatever) {
+    U&& await_transform(U&& whatever) noexcept {
         return std::forward<U>(whatever);
     }
 
@@ -295,9 +295,9 @@ class task {
     using promise_type = promise<T>;
     ex::coroutine_handle<> coro_ = nullptr;
 
-    bool await_ready() { return is_ready(); }
-    T await_resume() { return std::move(cur_value_ref()); }
-    void await_suspend(ex::coroutine_handle<> caller_coro) {
+    bool await_ready() noexcept { return is_ready(); }
+    T await_resume() noexcept { return std::move(cur_value_ref()); }
+    void await_suspend(ex::coroutine_handle<> caller_coro) noexcept {
         auto& coro = *static_cast<ex::coroutine_handle<promise_type>*>(&coro_);
         coro.promise().set_caller(caller_coro);
     }
@@ -344,11 +344,11 @@ class task {
         }
     }
 
-    task& set_self_release() & {
+    task& set_self_release() & noexcept {
         self_release_ = true;
         return *this;
     }
-    task&& set_self_release() && {
+    task&& set_self_release() && noexcept {
         self_release_ = true;
         return std::move(*this);
     }
@@ -540,7 +540,7 @@ namespace coroutine_tasks {
 template<typename T = void,
     bool Suspend = true,
     typename R = typename detail::isTaskOrRet<T>::Inner>
-task<R> make_task() {
+task<R> make_task() noexcept {
     return []() -> task<R> {
         R ret;
         co_await ex::suspend_if{Suspend};
@@ -548,7 +548,7 @@ task<R> make_task() {
     }().set_self_release();
 }
 template<typename R, typename Caller>
-task<R> make_task(R (Caller::*mem_func)(), Caller* caller) {
+task<R> make_task(R (Caller::*mem_func)(), Caller* caller) noexcept {
     return [](R (Caller::*memf)(), Caller* cal) -> task<R> {
         co_await ex::suspend_always{};
         return cal->*memf();
@@ -557,7 +557,7 @@ task<R> make_task(R (Caller::*mem_func)(), Caller* caller) {
 template<typename F,
     typename FF = typename detail::FunctionReferenceToPointer<F>::type,
     typename R = typename detail::CallArgsWith<FF>::TaskReturn>
-R make_task(F&& func) {
+R make_task(F&& func) noexcept {
     return [](FF f) -> R {
         co_await ex::suspend_always{};
         return f();
