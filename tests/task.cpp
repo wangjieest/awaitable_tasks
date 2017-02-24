@@ -29,13 +29,15 @@ int main() {
         old_task_handle.resume();
         // auto v = new_task.cur_value_ref();
     }
-    // empty task then
+
+    // for C interface
     {
         auto old_task = coroutine_tasks::make_task();
-        auto old_task_handle = old_task.get_promise_handle();
+        auto old_task_handle = old_task.get_promise_handle().lock();
         auto new_task = old_task.then(func).set_self_release();
-        old_task_handle.resume();
+        old_task_handle->resume();
         auto v = new_task.cur_value_ref();
+		old_task_handle->unlock();
     }
     // make_task then and then
     {
@@ -59,7 +61,6 @@ int main() {
         });
 
         auto old_task2_handle = old_task2.get_promise_handle();
-
         auto old_task_handle = old_task.get_promise_handle();
         auto new_task = old_task.then(func2)
                             .then([](int& v) -> short {

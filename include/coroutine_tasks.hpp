@@ -92,7 +92,7 @@ struct promise_data;
 template<>
 struct promise_data<void> : public ex::coroutine_handle<void> {
     promise_data* lock() {
-        if(count_)
+        if (count_)
             ++count_;
         return this;
     }
@@ -104,57 +104,40 @@ struct promise_data<void> : public ex::coroutine_handle<void> {
             count_ = 0;
             delete this;
         }
-        
     }
     promise_data(ex::coroutine_handle<> coro) {
-       *static_cast< ex::coroutine_handle<>*>(this) = coro; 
+        *static_cast<ex::coroutine_handle<>*>(this) = coro;
     }
 
-    protected:
+  protected:
     ~promise_data() = default;
     std::atomic<int> count_ = 1;
 };
 
 template<typename T>
 struct promise_data : promise_data<void> {
-    promise_data* lock() {
-        if(count_)
-            ++count_;
-        return this;
-    }
-
-    void unlock() {
-        if (count_ > 1)
-            --count_;
-        else {
-            count_ = 0;
-            delete this;
-        }
-        
-    }
     promise_data(ex::coroutine_handle<T> coro) {
-       *static_cast< ex::coroutine_handle<>*>(this) = coro; 
+        *static_cast<ex::coroutine_handle<>*>(this) = coro;
     }
 
-	promise<T>* get_promise() {
-		if (valid()) {
-			auto hand = static_cast<ex::coroutine_handle<T>*>(this);
-			return &(hand->promise());
-		}
-		else {
-			return nullptr;
-		}
-	}
+    template<typename V>
+    void set_value(V&& v) {
+        auto prom = get_promise();
+        if (prom) {
+            prom->set_value(std::forward<V&&>(v));
+            resume();
+        }
+    }
 
-	template<typename V>
-	void set_value(V&& v) {
-		auto prom = get_promise();
-		if (prom) {
-			prom->set_value(std::forward<V&&>(v));
-			resume();
-		}
-	}
-    protected:
+  protected:
+    promise<T>* get_promise() {
+        if (valid()) {
+            auto hand = static_cast<ex::coroutine_handle<T>*>(this);
+            return &(hand->promise());
+        } else {
+            return nullptr;
+        }
+    }
     ~promise_data() = default;
 };
 
@@ -166,7 +149,7 @@ class promise_handle<void> {
   public:
     promise_handle() = default;
     promise_data<>* lock() {
-        if(handle_)
+        if (handle_)
             return handle_->lock();
         return nullptr;
     }
@@ -177,13 +160,13 @@ class promise_handle<void> {
     }
     template<typename V>
     promise_handle& operator=(const promise_handle<V>& rhs) noexcept {
-        if(handle_)
+        if (handle_)
             handle_->unlock();
         handle_ = rhs.lock();
     }
     template<typename V>
     promise_handle(promise_handle<V>&& rhs) noexcept {
-        std::swap(handle_,rhs.handle_);
+        std::swap(handle_, rhs.handle_);
     }
     template<typename V>
     promise_handle& operator=(promise_handle<V>&& rhs) noexcept {
@@ -198,11 +181,12 @@ class promise_handle<void> {
         }
         return false;
     }
-    bool valid(){return handle_ && handle_->address();}
+    bool valid() { return handle_ && handle_->address(); }
     ~promise_handle() {
-        if(handle_)
+        if (handle_)
             handle_->unlock();
     }
+
   protected:
     promise_data<>* handle_ = nullptr;
 };
@@ -221,10 +205,8 @@ class promise_handle : public promise_handle<> {
 
     promise_handle() = default;
     ~promise_handle() = default;
-    promise_handle(const promise_handle& rhs) noexcept { handle_ = rhs.lock();}
-    promise_handle& operator=(const promise_handle& rhs) noexcept {
-        handle_ = rhs.lock();
-    }
+    promise_handle(const promise_handle& rhs) noexcept { handle_ = rhs.lock(); }
+    promise_handle& operator=(const promise_handle& rhs) noexcept { handle_ = rhs.lock(); }
     promise_handle(promise_handle&& rhs) noexcept { std::swap(handle_, rhs.handle_); }
     promise_handle& operator=(promise_handle&& rhs) noexcept {
         std::swap(handle_, rhs.handle_);
@@ -300,7 +282,7 @@ class promise : public promise<> {
         result_ = std::forward<U>(value);
     }
 
-	// can ref the value at any time
+    // can ref the value at any time
     T& cur_value_ref() noexcept { return result_; }
 
   private:
@@ -353,7 +335,7 @@ class task {
     void reset() noexcept {
         if (coro_) {
             RESUME_TASKS_TRACE("%p destroyed", coro_.address());
-            if(self_) {
+            if (self_) {
                 *static_cast<ex::coroutine_handle<>*>(self_) = nullptr;
                 self_->unlock();
             }
@@ -434,7 +416,6 @@ class task {
         static_assert(false, "then must use zero/one param");
     }
 
-
     template<typename F, typename R, typename... Args>
     std::enable_if_t<sizeof...(Args) == 1 && R::TaskOrRet::value, typename R::TaskReturn>
     then_impl(F&& func, detail::callable_traits<F(Args...)>) noexcept {
@@ -484,8 +465,6 @@ class task {
             return value;
         }(std::move(*this), std::forward<F>(func));
     }
-
-
 
     template<typename F, typename R, typename... Args>
     std::enable_if_t<sizeof...(Args) == 1 && !R::TaskOrRet::value &&
@@ -775,7 +754,7 @@ typename Ctx::task_type when_all_impl(std::index_sequence<Is...>, Ts&... ts) {
     (ctx, std::move(task_transform(ts, [ctx](typename detail::isTaskOrRet<Ts>::Inner a) -> Unkown {
         ctx->set_variadic_result<Is>(a);
         return Unkown{};
-    })).set_self_release() ...);
+    })).set_self_release()...);
     ctx->handle = ret.get_promise_handle();
     return ret;
 }
