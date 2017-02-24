@@ -1,5 +1,5 @@
 #pragma once
-#if 0
+#if 1
 #define RESUME_TASKS_TRACE(fmt, ...) printf("\n" fmt "\n", ##__VA_ARGS__)
 #else
 #define RESUME_TASKS_TRACE(fmt, ...)
@@ -109,9 +109,7 @@ struct promise_data<void> : public ex::coroutine_handle<void> {
     promise_data(ex::coroutine_handle<> coro) {
        *static_cast< ex::coroutine_handle<>*>(this) = coro; 
     }
-    bool resume(){
-	
-	}
+
     protected:
     ~promise_data() = default;
     std::atomic<int> count_ = 1;
@@ -137,10 +135,27 @@ struct promise_data : promise_data<void> {
     promise_data(ex::coroutine_handle<T> coro) {
        *static_cast< ex::coroutine_handle<>*>(this) = coro; 
     }
-    set_value()
+
+	promise<T>* get_promise() {
+		if (valid()) {
+			auto hand = static_cast<ex::coroutine_handle<T>*>(this);
+			return &(hand->promise());
+		}
+		else {
+			return nullptr;
+		}
+	}
+
+	template<typename V>
+	void set_value(V&& v) {
+		auto prom = get_promise();
+		if (prom) {
+			prom->set_value(std::forward<V&&>(v));
+			resume();
+		}
+	}
     protected:
     ~promise_data() = default;
-    std::atomic<int> count_ = 1;
 };
 
 template<typename T = void>
@@ -198,7 +213,7 @@ class promise_handle : public promise_handle<> {
     static promise_handle from_task(task<T>& t) noexcept {
         promise_handle ret;
         if (!t.self_) {
-            t.self_ = new promise_data(t.coro_);
+            t.self_ = new promise_data<>(t.coro_);
         }
         ret.handle_ = t.self_->lock();
         return ret;

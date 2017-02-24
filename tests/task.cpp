@@ -25,11 +25,9 @@ int main() {
     {
         auto old_task = coroutine_tasks::make_task();
         auto old_task_handle = old_task.get_promise_handle();
-        {
-            auto new_task = old_task.then(func).set_self_release();
-        }
+        { auto new_task = old_task.then(func).set_self_release(); }
         old_task_handle.resume();
-        //auto v = new_task.cur_value_ref();
+        // auto v = new_task.cur_value_ref();
     }
     // empty task then
     {
@@ -156,14 +154,17 @@ int main() {
         auto task_handle_a = tasks[0].get_promise_handle();
         auto task_handle_b = tasks[1].get_promise_handle();
         auto task_handle_c = tasks[2].get_promise_handle();
-        auto new_task =
-            coroutine_tasks::when_n(tasks.begin(), tasks.end(), 2)
-                .then([](std::vector<std::pair<size_t, int>>&) { std::cout << "ok " << std::endl; })
-                .set_self_release();
-        task_handle_a.resume();
-        task_handle_b.resume();
-        // task_handle_c.resume();
-        auto v = new_task.cur_value_ref();
+        {
+            auto new_task = coroutine_tasks::when_n(tasks.begin(), tasks.end(), 2)
+                                .then([](std::vector<std::pair<size_t, int>>&) {
+                                    std::cout << "ok " << std::endl;
+                                })
+                                .set_self_release();
+            task_handle_a.resume();
+            task_handle_b.resume();
+            auto v = new_task.cur_value_ref();
+        }
+        task_handle_c.resume();
     }
     // when_n one
     {
@@ -174,16 +175,18 @@ int main() {
         auto task_handle_a = tasks[0].get_promise_handle();
         auto task_handle_b = tasks[1].get_promise_handle();
         auto task_handle_c = tasks[2].get_promise_handle();
-        auto new_task = coroutine_tasks::when_n(tasks.begin(), tasks.end(), 1)
-                            .then([](std::vector<std::pair<size_t, int>>& xx) {
-                                std::cout << "ok " << std::endl;
-                            })
-                            .then([]() { printf("ok"); })
-                            .set_self_release();
-        task_handle_a.resume();
-        // task_handle_b.resume();
-        // task_handle_c.resume();
-        auto v = new_task.cur_value_ref();
+        {
+            auto new_task = coroutine_tasks::when_n(tasks.begin(), tasks.end(), 1)
+                                .then([](std::vector<std::pair<size_t, int>>& xx) {
+                                    std::cout << "ok " << std::endl;
+                                })
+                                .then([]() { printf("ok"); })
+                                .set_self_release();
+            task_handle_a.resume();
+            auto v = new_task.cur_value_ref();
+			task_handle_b.resume();
+		}
+        task_handle_c.resume();
     }
     // when_any
     {
@@ -194,14 +197,16 @@ int main() {
         auto task_handle_a = tasks[0].get_promise_handle();
         auto task_handle_b = tasks[1].get_promise_handle();
         auto task_handle_c = tasks[2].get_promise_handle();
-        auto new_task =
-            coroutine_tasks::when_any(tasks.begin(), tasks.end())
-                .then([](std::pair<size_t, int>& xx) { std::cout << "ok " << std::endl; })
-                .set_self_release();
-        task_handle_a.resume();
-        // task_handle_b.resume();
-        // task_handle_c.resume();
-        auto v = new_task.cur_value_ref();
+        {
+            auto new_task =
+                coroutine_tasks::when_any(tasks.begin(), tasks.end())
+                    .then([](std::pair<size_t, int>& xx) { std::cout << "ok " << std::endl; })
+                    .set_self_release();
+            task_handle_a.resume();
+            auto v = new_task.cur_value_ref();
+			task_handle_b.resume();
+		}
+        task_handle_c.resume();
     }
     // when_any
     {
@@ -212,18 +217,20 @@ int main() {
         auto task_handle_a = tasks[0].get_promise_handle();
         auto task_handle_b = tasks[1].get_promise_handle();
         auto task_handle_c = tasks[2].get_promise_handle();
-        auto new_task = coroutine_tasks::when_any(tasks.begin(), tasks.end())
-                            .then([](std::pair<size_t, int>& xx)
-                                      -> coroutine_tasks::task<std::pair<size_t, int>> {
-                                co_await coroutine_tasks::ex::suspend_never{};
-                                std::cout << "ok " << std::endl;
-                                return xx;
-                            })
-                            .set_self_release();
-        task_handle_a.resume();
-        // task_handle_b.resume();
-        // task_handle_c.resume();
-        auto v = new_task.cur_value_ref();
+        {
+            auto new_task = coroutine_tasks::when_any(tasks.begin(), tasks.end())
+                                .then([](std::pair<size_t, int>& xx)
+                                          -> coroutine_tasks::task<std::pair<size_t, int>> {
+                                    co_await coroutine_tasks::ex::suspend_never{};
+                                    std::cout << "ok " << std::endl;
+                                    return xx;
+                                })
+                                .set_self_release();
+            task_handle_a.resume();
+            auto v = new_task.cur_value_ref();
+			task_handle_b.resume();
+		}
+        task_handle_c.resume();
     }
     return 0;
 }
