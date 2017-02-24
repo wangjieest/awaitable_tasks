@@ -21,7 +21,7 @@
     <ClInclude Include="targetver.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\include\coroutine_tasks.hpp">
+    <ClInclude Include="..\include\awaitable_tasks.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

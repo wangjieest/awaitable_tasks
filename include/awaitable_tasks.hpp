@@ -8,7 +8,7 @@
 #include <experimental/resumable>
 #include <memory>
 #include <atomic>
-namespace coroutine_tasks {
+namespace awaitable_tasks {
 namespace ex = std::experimental;
 template<typename>
 class task;
@@ -536,7 +536,7 @@ class scoped_task<void> : public task<detail::Unkown> {
 }
 
 // make_task
-namespace coroutine_tasks {
+namespace awaitable_tasks {
 template<typename T = void,
     bool Suspend = true,
     typename R = typename detail::isTaskOrRet<T>::Inner>
@@ -568,7 +568,7 @@ R make_task(F&& func) noexcept {
 
 // when_all range
 #include <vector>
-namespace coroutine_tasks {
+namespace awaitable_tasks {
 namespace detail {
 template<typename T>
 struct when_all_range_context {
@@ -634,7 +634,7 @@ typename Ctx::retrun_type when_all(InputIterator first, InputIterator last) {
 }
 
 // when_n/when_any
-namespace coroutine_tasks {
+namespace awaitable_tasks {
 // decides which type when_n returns to std::vector<std::pair<size_t, T>>
 namespace detail {
 template<typename T>
@@ -712,7 +712,7 @@ task<std::pair<size_t, T>> when_any(InputIterator first, InputIterator last) {
 
 // when_all variadic/zip
 #include <tuple>
-namespace coroutine_tasks {
+namespace awaitable_tasks {
 namespace detail {
 template<typename... Ts>
 struct when_all_variadic_context {

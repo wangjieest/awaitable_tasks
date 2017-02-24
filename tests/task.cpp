@@ -4,7 +4,7 @@
 #include "stdafx.h"
 #include <string>
 #include <iostream>
-#include "../include/coroutine_tasks.hpp"
+#include "../include/awaitable_tasks.hpp"
 
 int g_data = 42;
 
@@ -23,7 +23,7 @@ int main() {
         return g_data;
     };
     {
-        auto old_task = coroutine_tasks::make_task();
+        auto old_task = awaitable_tasks::make_task();
         auto old_task_handle = old_task.get_promise_handle();
         { auto new_task = old_task.then(func).set_self_release(); }
         old_task_handle.resume();
@@ -32,7 +32,7 @@ int main() {
 
     // for C interface
     {
-        auto old_task = coroutine_tasks::make_task();
+        auto old_task = awaitable_tasks::make_task();
         auto old_task_handle = old_task.get_promise_handle().lock();
         auto new_task = old_task.then(func).set_self_release();
         old_task_handle->resume();
@@ -41,7 +41,7 @@ int main() {
     }
     // make_task then and then
     {
-        auto old_task = coroutine_tasks::make_task(func);
+        auto old_task = awaitable_tasks::make_task(func);
         auto old_task_handle = old_task.get_promise_handle();
         auto new_task = old_task.then(fund).set_self_release();
         old_task_handle.resume();
@@ -49,13 +49,13 @@ int main() {
     }
     // then task_gen
     {
-        auto old_task = coroutine_tasks::make_task([]() -> short {
+        auto old_task = awaitable_tasks::make_task([]() -> short {
             std::cout << "start" << std::endl;
             return 33;
         });
 
         // lambdas capture error, so set it static
-        static auto old_task2 = coroutine_tasks::make_task([]() -> short {
+        static auto old_task2 = awaitable_tasks::make_task([]() -> short {
             std::cout << "end" << std::endl;
             return 44;
         });
@@ -69,7 +69,7 @@ int main() {
                             })
                             // [t = std::move(old_task2)]{ co_await t;}
                             // would be an error
-                            .then([](short& v) -> coroutine_tasks::task<int> {
+                            .then([](short& v) -> awaitable_tasks::task<int> {
                                 std::cout << "get2 " << v << std::endl;
                                 // usually this drived async
                                 v = co_await old_task2;
@@ -83,16 +83,16 @@ int main() {
     }
     // then task_gen
     {
-        auto old_task = coroutine_tasks::make_task(func);
+        auto old_task = awaitable_tasks::make_task(func);
         auto old_task_handle = old_task.get_promise_handle();
         auto new_task = old_task.then(func2)
                             .then([](int& v) -> short {
                                 std::cout << "get1 " << v << std::endl;
                                 return 33;
                             })
-                            .then([](short& v) -> coroutine_tasks::task<int> {
+                            .then([](short& v) -> awaitable_tasks::task<int> {
                                 std::cout << "get2 " << v << std::endl;
-                                co_await coroutine_tasks::ex::suspend_always{};
+                                co_await awaitable_tasks::ex::suspend_always{};
                                 std::cout << "get3 " << v << std::endl;
                                 return 55;
                             })
@@ -103,11 +103,11 @@ int main() {
     }
     // when_all zip
     {
-        auto task_a = coroutine_tasks::make_task(func);
-        auto task_b = coroutine_tasks::make_task(func);
+        auto task_a = awaitable_tasks::make_task(func);
+        auto task_b = awaitable_tasks::make_task(func);
         auto task_a_handle = task_a.get_promise_handle();
         auto task_b_handle = task_b.get_promise_handle();
-        auto new_task = coroutine_tasks::when_all(task_a, task_b)
+        auto new_task = awaitable_tasks::when_all(task_a, task_b)
                             .then([](std::tuple<int, int>&) { std::cout << "ok " << std::endl; })
                             .set_self_release();
         task_a_handle.resume();
@@ -116,12 +116,12 @@ int main() {
     }
     // when_all map
     {
-        std::vector<coroutine_tasks::task<int>> tasks;
-        tasks.emplace_back(coroutine_tasks::make_task(func));
-        tasks.emplace_back(coroutine_tasks::make_task(func));
+        std::vector<awaitable_tasks::task<int>> tasks;
+        tasks.emplace_back(awaitable_tasks::make_task(func));
+        tasks.emplace_back(awaitable_tasks::make_task(func));
         auto task_handle_a = tasks[0].get_promise_handle();
         auto task_handle_b = tasks[1].get_promise_handle();
-        auto new_task = coroutine_tasks::when_all(tasks.begin(), tasks.end())
+        auto new_task = awaitable_tasks::when_all(tasks.begin(), tasks.end())
                             .then([](std::vector<int>&) { std::cout << "ok " << std::endl; })
                             .set_self_release();
         task_handle_a.resume();
@@ -130,15 +130,15 @@ int main() {
     }
     // when_n all
     {
-        std::vector<coroutine_tasks::task<int>> tasks;
-        tasks.emplace_back(coroutine_tasks::make_task(func));
-        tasks.emplace_back(coroutine_tasks::make_task(func));
-        tasks.emplace_back(coroutine_tasks::make_task(func));
+        std::vector<awaitable_tasks::task<int>> tasks;
+        tasks.emplace_back(awaitable_tasks::make_task(func));
+        tasks.emplace_back(awaitable_tasks::make_task(func));
+        tasks.emplace_back(awaitable_tasks::make_task(func));
         auto task_handle_a = tasks[0].get_promise_handle();
         auto task_handle_b = tasks[1].get_promise_handle();
         auto task_handle_c = tasks[2].get_promise_handle();
         auto new_task =
-            coroutine_tasks::when_n(tasks.begin(), tasks.end(), tasks.size())
+            awaitable_tasks::when_n(tasks.begin(), tasks.end(), tasks.size())
                 .then([](std::vector<std::pair<size_t, int>>&) { std::cout << "ok " << std::endl; })
                 .set_self_release();
         task_handle_a.resume();
@@ -148,15 +148,15 @@ int main() {
     }
     // when_n some
     {
-        std::vector<coroutine_tasks::task<int>> tasks;
-        tasks.emplace_back(coroutine_tasks::make_task(func));
-        tasks.emplace_back(coroutine_tasks::make_task(func));
-        tasks.emplace_back(coroutine_tasks::make_task(func));
+        std::vector<awaitable_tasks::task<int>> tasks;
+        tasks.emplace_back(awaitable_tasks::make_task(func));
+        tasks.emplace_back(awaitable_tasks::make_task(func));
+        tasks.emplace_back(awaitable_tasks::make_task(func));
         auto task_handle_a = tasks[0].get_promise_handle();
         auto task_handle_b = tasks[1].get_promise_handle();
         auto task_handle_c = tasks[2].get_promise_handle();
         {
-            auto new_task = coroutine_tasks::when_n(tasks.begin(), tasks.end(), 2)
+            auto new_task = awaitable_tasks::when_n(tasks.begin(), tasks.end(), 2)
                                 .then([](std::vector<std::pair<size_t, int>>&) {
                                     std::cout << "ok " << std::endl;
                                 })
@@ -169,15 +169,15 @@ int main() {
     }
     // when_n one
     {
-        std::vector<coroutine_tasks::task<int>> tasks;
-        tasks.emplace_back(coroutine_tasks::make_task(func));
-        tasks.emplace_back(coroutine_tasks::make_task(func));
-        tasks.emplace_back(coroutine_tasks::make_task(func));
+        std::vector<awaitable_tasks::task<int>> tasks;
+        tasks.emplace_back(awaitable_tasks::make_task(func));
+        tasks.emplace_back(awaitable_tasks::make_task(func));
+        tasks.emplace_back(awaitable_tasks::make_task(func));
         auto task_handle_a = tasks[0].get_promise_handle();
         auto task_handle_b = tasks[1].get_promise_handle();
         auto task_handle_c = tasks[2].get_promise_handle();
         {
-            auto new_task = coroutine_tasks::when_n(tasks.begin(), tasks.end(), 1)
+            auto new_task = awaitable_tasks::when_n(tasks.begin(), tasks.end(), 1)
                                 .then([](std::vector<std::pair<size_t, int>>& xx) {
                                     std::cout << "ok " << std::endl;
                                 })
@@ -191,16 +191,16 @@ int main() {
     }
     // when_any
     {
-        std::vector<coroutine_tasks::task<int>> tasks;
-        tasks.emplace_back(coroutine_tasks::make_task(func));
-        tasks.emplace_back(coroutine_tasks::make_task(func));
-        tasks.emplace_back(coroutine_tasks::make_task(func));
+        std::vector<awaitable_tasks::task<int>> tasks;
+        tasks.emplace_back(awaitable_tasks::make_task(func));
+        tasks.emplace_back(awaitable_tasks::make_task(func));
+        tasks.emplace_back(awaitable_tasks::make_task(func));
         auto task_handle_a = tasks[0].get_promise_handle();
         auto task_handle_b = tasks[1].get_promise_handle();
         auto task_handle_c = tasks[2].get_promise_handle();
         {
             auto new_task =
-                coroutine_tasks::when_any(tasks.begin(), tasks.end())
+                awaitable_tasks::when_any(tasks.begin(), tasks.end())
                     .then([](std::pair<size_t, int>& xx) { std::cout << "ok " << std::endl; })
                     .set_self_release();
             task_handle_a.resume();
@@ -211,18 +211,18 @@ int main() {
     }
     // when_any
     {
-        std::vector<coroutine_tasks::task<int>> tasks;
-        tasks.emplace_back(coroutine_tasks::make_task(func));
-        tasks.emplace_back(coroutine_tasks::make_task(func));
-        tasks.emplace_back(coroutine_tasks::make_task(func));
+        std::vector<awaitable_tasks::task<int>> tasks;
+        tasks.emplace_back(awaitable_tasks::make_task(func));
+        tasks.emplace_back(awaitable_tasks::make_task(func));
+        tasks.emplace_back(awaitable_tasks::make_task(func));
         auto task_handle_a = tasks[0].get_promise_handle();
         auto task_handle_b = tasks[1].get_promise_handle();
         auto task_handle_c = tasks[2].get_promise_handle();
         {
-            auto new_task = coroutine_tasks::when_any(tasks.begin(), tasks.end())
+            auto new_task = awaitable_tasks::when_any(tasks.begin(), tasks.end())
                                 .then([](std::pair<size_t, int>& xx)
-                                          -> coroutine_tasks::task<std::pair<size_t, int>> {
-                                    co_await coroutine_tasks::ex::suspend_never{};
+                                          -> awaitable_tasks::task<std::pair<size_t, int>> {
+                                    co_await awaitable_tasks::ex::suspend_never{};
                                     std::cout << "ok " << std::endl;
                                     return xx;
                                 })
