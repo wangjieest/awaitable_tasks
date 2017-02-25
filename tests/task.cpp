@@ -37,6 +37,7 @@ int main() {
         auto new_task = old_task.then(func).set_self_release();
         old_task_handle->resume();
         auto v = new_task.cur_value_ref();
+		_ASSERT(v == 43);
 		old_task_handle->unlock();
     }
     // make_task then and then
@@ -46,6 +47,7 @@ int main() {
         auto new_task = old_task.then(fund).set_self_release();
         old_task_handle.resume();
         auto v = new_task.cur_value_ref();
+		_ASSERT(v == 45);
     }
     // then task_gen
     {
@@ -80,6 +82,7 @@ int main() {
         old_task_handle.resume();
         old_task2_handle.resume();
         auto v = new_task.cur_value_ref();
+		_ASSERT(v == 44);
     }
     // then task_gen
     {
@@ -100,6 +103,7 @@ int main() {
         old_task_handle.resume();
         new_task.get_promise_handle().resume();
         auto v = new_task.cur_value_ref();
+		_ASSERT(v == 0);  // issue
     }
     // when_all zip
     {
@@ -113,6 +117,8 @@ int main() {
         task_a_handle.resume();
         task_b_handle.resume();
         auto v = new_task.cur_value_ref();
+		_ASSERT(std::get<0>(v) == 49);
+		_ASSERT(std::get<1>(v) == 50);
     }
     // when_all map
     {
@@ -127,6 +133,8 @@ int main() {
         task_handle_a.resume();
         task_handle_b.resume();
         auto v = new_task.cur_value_ref();
+		_ASSERT(v[0] == 51);
+		_ASSERT(v[1] == 52);
     }
     // when_n all
     {
@@ -145,6 +153,9 @@ int main() {
         task_handle_b.resume();
         task_handle_c.resume();
         auto v = new_task.cur_value_ref();
+		_ASSERT(v[0].second == 53);
+		_ASSERT(v[1].second == 54);
+		_ASSERT(v[2].second == 55);
     }
     // when_n some
     {
@@ -164,7 +175,9 @@ int main() {
             task_handle_a.resume();
             task_handle_b.resume();
             auto v = new_task.cur_value_ref();
-        }
+			_ASSERT(v[0].second == 56);
+			_ASSERT(v[1].second == 57);
+		}
         task_handle_c.resume();
     }
     // when_n one
@@ -185,6 +198,7 @@ int main() {
                                 .set_self_release();
             task_handle_a.resume();
             auto v = new_task.cur_value_ref();
+			_ASSERT(v[0].second == 58);
 			task_handle_b.resume();
 		}
         task_handle_c.resume();
@@ -205,6 +219,8 @@ int main() {
                     .set_self_release();
             task_handle_a.resume();
             auto v = new_task.cur_value_ref();
+			_ASSERT(v.first == 0);
+			_ASSERT(v.second == 60);
 			task_handle_b.resume();
 		}
         task_handle_c.resume();
@@ -229,6 +245,8 @@ int main() {
                                 .set_self_release();
             task_handle_a.resume();
             auto v = new_task.cur_value_ref();
+			_ASSERT(v.first == 0);
+			_ASSERT(v.second == 62);
 			task_handle_b.resume();
 		}
         task_handle_c.resume();
