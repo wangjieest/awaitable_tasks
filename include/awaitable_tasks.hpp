@@ -89,6 +89,7 @@ struct CallArgsWith {
 
 template<typename T = void>
 struct promise_data;
+
 template<>
 struct promise_data<void> : public ex::coroutine_handle<void> {
     promise_data* lock() noexcept {
@@ -97,21 +98,35 @@ struct promise_data<void> : public ex::coroutine_handle<void> {
         return this;
     }
 
-    void unlock() noexcept {
+    void unlock(bool del = false) noexcept {
         if (count_ > 1)
             --count_;
         else {
             count_ = 0;
+            if (del)
+                destroy_coro();
             delete this;
         }
     }
+
     promise_data(ex::coroutine_handle<> coro) {
         *static_cast<ex::coroutine_handle<>*>(this) = coro;
     }
 
   protected:
+    template<typename>
+    friend class task;
+    void destroy_coro() noexcept {
+        if (next_) {
+            next_->destroy_coro();
+        } else if (address()) {
+            destroy();
+        }
+    }
+
     ~promise_data() = default;
     std::atomic<int> count_ = 1;
+    promise_data<>* next_ = nullptr;
 };
 
 template<typename T>
@@ -172,6 +187,15 @@ class promise_handle<void> {
     promise_handle& operator=(promise_handle<V>&& rhs) noexcept {
         std::swap(handle_, rhs.handle_);
         return *this;
+    }
+    template<typename T>
+    static promise_handle from_task(task<T>& t) noexcept {
+        promise_handle ret;
+        if (!t.self_) {
+            t.self_ = new promise_data<>(t.coro_);
+        }
+        ret.handle_ = t.self_->lock();
+        return ret;
     }
 
     bool resume() {
@@ -235,6 +259,7 @@ class promise_handle : public promise_handle<> {
 template<>
 class promise<void> {
   public:
+    promise& get_return_object() noexcept { return *this; }
     auto initial_suspend() noexcept { return ex::suspend_never{}; }
     auto final_suspend() noexcept {
         struct final_awaiter {
@@ -255,16 +280,33 @@ class promise<void> {
     void set_caller(ex::coroutine_handle<> caller_coro) noexcept {
         std::swap(caller_coro, caller_coro_);
     }
+    void return_void() {}
 
   private:
     ex::coroutine_handle<> caller_coro_;
 };
 
 template<typename T>
-class promise : public promise<> {
+class promise {
   public:
     using result_t = T;
     using task_t = task<result_t>;
+    auto initial_suspend() noexcept { return ex::suspend_never{}; }
+    auto final_suspend() noexcept {
+        struct final_awaiter {
+            promise* me;
+            bool await_ready() noexcept { return false; }
+            void await_suspend(ex::coroutine_handle<>) noexcept {
+                // if suspend by caller , then resume to it.
+                if (me->caller_coro_) {
+                    RESUME_TASKS_TRACE("resumed %p", static_cast<void*>(me));
+                    me->caller_coro_.resume();
+                }
+            }
+            void await_resume() noexcept {}
+        };
+        return final_awaiter{this};
+    }
 
     promise& get_return_object() noexcept { return *this; }
     template<typename U>
@@ -284,8 +326,12 @@ class promise : public promise<> {
 
     // can ref the value at any time
     T& cur_value_ref() noexcept { return result_; }
+    void set_caller(ex::coroutine_handle<> caller_coro) noexcept {
+        std::swap(caller_coro, caller_coro_);
+    }
 
   private:
+    ex::coroutine_handle<> caller_coro_;
     T result_;
 };
 
@@ -307,6 +353,7 @@ class task {
                                             ex::coroutine_handle<promise_type>::from_promise(prom)
                                                 .address())) {
         RESUME_TASKS_TRACE("%p created", coro_.address());
+		self_ = new promise_data<>(coro_);
     }
 
     task() = default;
@@ -387,10 +434,16 @@ class task {
         return then_impl<FF, C>(std::forward<FF>(func), Arguments());
     }
 
-    task<T> then() noexcept {
-        set_self_release();
-        return std::move(*this);
+    task<void> then_reset() {
+        return [](task<T> t) -> typename task<void> {
+            auto&& value = co_await t;
+            return;
+        }
+        (std::move(*this));
     }
+
+    task<T> then_multi() noexcept { return std::move(*this); }
+
     template<class Callback, class... Callbacks>
     auto then_multi(Callback&& fn, Callbacks&&... fns) noexcept {
         return then(std::forward<Callback>(fn)).then_multi(std::forward<Callbacks>(fns)...);
@@ -403,7 +456,7 @@ class task {
 
   private:
     template<typename>
-    friend class scoped_task;
+    friend class task;
     template<typename>
     friend class promise_handle;
     promise_data<>* self_ = nullptr;
@@ -419,11 +472,14 @@ class task {
     template<typename F, typename R, typename... Args>
     std::enable_if_t<sizeof...(Args) == 1 && R::TaskOrRet::value, typename R::TaskReturn>
     then_impl(F&& func, detail::callable_traits<F(Args...)>) noexcept {
-        return [](task<T> t, std::decay_t<F> f) -> typename R::TaskReturn {
+		auto &next = self_->next_;
+		auto ret = [](task<T> t, std::decay_t<F> f) -> typename R::TaskReturn {
             auto&& value = co_await t;
             return co_await f(value).set_self_release();
         }
         (std::move(*this), std::move(func));
+		next = ret.self_->lock();
+        return std::move(ret);
     }
 
     template<typename F, typename R, typename... Args>
@@ -432,11 +488,14 @@ class task {
                              std::is_same_v<typename R::OrignalRet, void>),
             task<T>>
     then_impl(F&& func, detail::callable_traits<F(Args...)>) noexcept {
-        return [](task<T> t, std::decay_t<F> f) -> task<T> {
+		auto &next = self_->next_;
+		auto ret = [](task<T> t, std::decay_t<F> f) -> task<T> {
             auto&& value = co_await t;
             return co_await f().set_self_release();
             return value;
         }(std::move(*this), std::move(func));
+		next = ret.self_->lock();
+		return std::move(ret);
     }
 
     template<typename F, typename R, typename... Args>
@@ -445,13 +504,16 @@ class task {
                              !std::is_same_v<typename R::OrignalRet, void>),
             typename R::TaskReturn>
     then_impl(F&& func, detail::callable_traits<F(Args...)>) noexcept {
-        return [](task<T> t, std::decay_t<F> f) -> typename R::TaskReturn {
+		auto &next = self_->next_;
+		auto ret = [](task<T> t, std::decay_t<F> f) -> typename R::TaskReturn {
             co_await t;
             auto ff = f();
             auto&& value = co_await ff.set_self_release();
             return value;
         }
         (std::move(*this), std::move(func));
+		next = ret.self_->lock();
+		return std::move(ret);
     }
 
     template<typename F, typename R, typename... Args>
@@ -459,11 +521,14 @@ class task {
                          std::is_same_v<typename R::OrignalRet, void>,
             task<T>>
     then_impl(F&& func, detail::callable_traits<F(Args...)>) noexcept {
-        return [](task<T> t, std::decay_t<F> f) -> task<T> {
+		auto &next = self_->next_;
+		auto ret = [](task<T> t, std::decay_t<F> f) -> task<T> {
             auto&& value = co_await t;
             f(value);
             return value;
         }(std::move(*this), std::forward<F>(func));
+		next = ret.self_->lock();
+		return std::move(ret);
     }
 
     template<typename F, typename R, typename... Args>
@@ -471,11 +536,14 @@ class task {
                          !std::is_same_v<typename R::OrignalRet, void>,
             typename R::TaskReturn>
     then_impl(F&& func, detail::callable_traits<F(Args...)>) noexcept {
-        return [](task<T> t, std::decay_t<F> f) -> typename R::TaskReturn {
+		auto &next = self_->next_;
+		auto ret = [](task<T> t, std::decay_t<F> f) -> typename R::TaskReturn {
             auto&& value = co_await t;
             return f(value);
         }
         (std::move(*this), std::forward<F>(func));
+		next = ret.self_->lock();
+		return std::move(ret);
     }
 
     template<typename F, typename R, typename... Args>
@@ -483,12 +551,15 @@ class task {
                          std::is_same_v<typename R::OrignalRet, void>,
             task<T>>
     then_impl(F&& func, detail::callable_traits<F(Args...)>) noexcept {
-        return [](task<T> t, std::decay_t<F> f) -> typename task<T> {
+		auto &next = self_->next_;
+		auto ret = [](task<T> t, std::decay_t<F> f) -> typename task<T> {
             auto&& value = co_await t;
             f();
             return value;
         }
         (std::move(*this), std::forward<F>(func));
+		next = ret.self_->lock();
+		return std::move(ret);
     }
 
     template<typename F, typename R, typename... Args>
@@ -496,41 +567,14 @@ class task {
                          !std::is_same_v<typename R::OrignalRet, void>,
             typename R::TaskReturn>
     then_impl(F&& func, detail::callable_traits<F(Args...)>) noexcept {
-        return [](task<T> t, std::decay_t<F> f) -> typename R::TaskReturn {
+		auto &next = self_->next_;
+        auto ret = [](task<T> t, std::decay_t<F> f) -> typename R::TaskReturn {
             co_await t;
             return f();
         }
         (std::move(*this), std::forward<F>(func));
-    }
-};
-
-template<typename T = void>
-class scoped_task;
-
-template<typename T>
-class scoped_task : public task<T> {
-  public:
-    scoped_task(task<T>&& t) {
-        this->self_ = std::move(t.self_);
-        this->coro_ = t.coro_;
-        this->self_release_ = true;
-
-        t.coro_ = nullptr;
-        t.self_release_ = false;
-    }
-};
-
-template<>
-class scoped_task<void> : public task<detail::Unkown> {
-  public:
-    template<typename T>
-    scoped_task(task<T>&& t) {
-        this->self_ = std::move(t.self_);
-        this->coro_ = t.coro_;
-        this->self_release_ = true;
-
-        t.coro_ = nullptr;
-        t.self_release_ = false;
+		next = ret.self_->lock();
+		return std::move(ret);
     }
 };
 }
