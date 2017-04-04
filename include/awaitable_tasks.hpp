@@ -1,8 +1,8 @@
 #pragma once
 #if 1
-#define RESUME_TASKS_TRACE(fmt, ...) printf("\n" fmt "\n", ##__VA_ARGS__)
+#define AWAITABLE_TASKS_TRACE(fmt, ...) printf("\n" fmt "\n", ##__VA_ARGS__)
 #else
-#define RESUME_TASKS_TRACE(fmt, ...)
+#define AWAITABLE_TASKS_TRACE(fmt, ...)
 #endif
 
 #include <experimental/resumable>
@@ -91,27 +91,38 @@ template<typename T = void>
 struct promise_data;
 template<>
 struct promise_data<void> : public ex::coroutine_handle<void> {
-    promise_data* lock() noexcept {
-        if (count_)
-            ++count_;
-        return this;
-    }
-
-    void unlock() noexcept {
-        if (count_ > 1)
-            --count_;
-        else {
-            count_ = 0;
-            delete this;
-        }
-    }
     promise_data(ex::coroutine_handle<> coro) {
         *static_cast<ex::coroutine_handle<>*>(this) = coro;
     }
 
-  protected:
+    bool is_self_release() { return self_release_; }
+    void set_self_release(bool b) {
+        self_release_ = b;
+        if (next_)
+            next_->set_self_release(b);
+    }
+    template<typename>
+    friend class task;
     ~promise_data() = default;
-    std::atomic<int> count_ = 1;
+
+    bool valid() { return address() != nullptr; }
+    void clear_coro() { *static_cast<ex::coroutine_handle<>*>(this) = nullptr; }
+    void destroy_context() {
+        if (!self_release_) {
+            auto target = next_;
+            if (!target) {
+                destroy();
+            } else {
+                while (target->next_)
+                    target = target->next_;
+            }
+            target->destroy();
+        }
+    }
+
+  protected:
+    std::shared_ptr<promise_data<>> next_;
+    bool self_release_ = true;
 };
 
 template<typename T>
@@ -148,21 +159,13 @@ template<>
 class promise_handle<void> {
   public:
     promise_handle() = default;
-    promise_data<>* lock() noexcept {
-        if (handle_)
-            return handle_->lock();
-        return nullptr;
-    }
-
     template<typename V>
     promise_handle(const promise_handle<V>& rhs) noexcept {
-        handle_ = rhs.lock();
+        handle_ = rhs.handle_;
     }
     template<typename V>
     promise_handle& operator=(const promise_handle<V>& rhs) noexcept {
-        if (handle_)
-            handle_->unlock();
-        handle_ = rhs.lock();
+        handle_ = rhs.handle_;
     }
     template<typename V>
     promise_handle(promise_handle<V>&& rhs) noexcept {
@@ -181,14 +184,19 @@ class promise_handle<void> {
         }
         return false;
     }
-    bool valid() noexcept { return handle_ && handle_->address(); }
-    ~promise_handle() {
+    bool valid() noexcept { return handle_ && handle_->valid(); }
+    void cancel_self_release() {
         if (handle_)
-            handle_->unlock();
+            handle_->set_self_release(false);
+    }
+    ~promise_handle() {
+        if (valid() && !handle_->is_self_release()) {
+            handle_->destroy_context();
+        }
     }
 
   protected:
-    promise_data<>* handle_ = nullptr;
+    std::shared_ptr<promise_data<>> handle_;
 };
 
 template<typename T>
@@ -196,17 +204,14 @@ class promise_handle : public promise_handle<> {
   public:
     static promise_handle from_task(task<T>& t) noexcept {
         promise_handle ret;
-        if (!t.self_) {
-            t.self_ = new promise_data<>(t.coro_);
-        }
-        ret.handle_ = t.self_->lock();
+        ret.handle_ = t.ctb_;
         return ret;
     }
 
     promise_handle() = default;
     ~promise_handle() = default;
-    promise_handle(const promise_handle& rhs) noexcept { handle_ = rhs.lock(); }
-    promise_handle& operator=(const promise_handle& rhs) noexcept { handle_ = rhs.lock(); }
+    promise_handle(const promise_handle& rhs) noexcept { handle_ = rhs.handle_; }
+    promise_handle& operator=(const promise_handle& rhs) noexcept { handle_ = rhs.handle_; }
     promise_handle(promise_handle&& rhs) noexcept { std::swap(handle_, rhs.handle_); }
     promise_handle& operator=(promise_handle&& rhs) noexcept {
         std::swap(handle_, rhs.handle_);
@@ -215,7 +220,7 @@ class promise_handle : public promise_handle<> {
 
     promise<T>* get_promise() noexcept {
         if (valid()) {
-            auto hand = static_cast<ex::coroutine_handle<T>*>(handle_);
+            auto hand = static_cast<ex::coroutine_handle<T>*>(handle_.get());
             return &(hand->promise());
         } else {
             return nullptr;
@@ -243,7 +248,7 @@ class promise<void> {
             void await_suspend(ex::coroutine_handle<>) noexcept {
                 // if suspend by caller , then resume to it.
                 if (me->caller_coro_) {
-                    RESUME_TASKS_TRACE("resumed %p", static_cast<void*>(me));
+                    AWAITABLE_TASKS_TRACE("resumed %p", static_cast<void*>(me));
                     me->caller_coro_.resume();
                 }
             }
@@ -293,7 +298,6 @@ template<typename T>
 class task {
   public:
     using promise_type = promise<T>;
-    ex::coroutine_handle<> coro_ = nullptr;
 
     bool await_ready() noexcept { return is_ready(); }
     T await_resume() noexcept { return std::move(cur_value_ref()); }
@@ -306,26 +310,23 @@ class task {
         : coro_(ex::coroutine_handle<>::from_address(
                                             ex::coroutine_handle<promise_type>::from_promise(prom)
                                                 .address())) {
-        RESUME_TASKS_TRACE("%p created", coro_.address());
+        AWAITABLE_TASKS_TRACE("%p created", this);
+        ctb_ = std::make_shared<promise_data<>>(coro_);
     }
 
     task() = default;
     task(task const&) = delete;
     task& operator=(task const&) = delete;
 
-    task(task&& rhs) noexcept
-        : coro_(rhs.coro_), self_(rhs.self_), self_release_(rhs.self_release_) {
+    task(task&& rhs) noexcept : coro_(rhs.coro_), ctb_(rhs.ctb_) {
         rhs.coro_ = nullptr;
-        rhs.self_release_ = false;
-        rhs.self_ = nullptr;
+        rhs.ctb_ = nullptr;
     }
     task& operator=(task&& rhs) noexcept {
         if (&rhs != this) {
             coro_ = rhs.coro_;
-            self_release_ = rhs.self_release_;
-            self_ = rhs.self_;
-            rhs.self_ = nullptr;
-            rhs.self_release_ = false;
+            ctb_ = rhs.ctb_;
+            rhs.ctb_ = nullptr;
             rhs.coro_ = nullptr;
         }
 
@@ -334,27 +335,18 @@ class task {
 
     void reset() noexcept {
         if (coro_) {
-            RESUME_TASKS_TRACE("%p destroyed", coro_.address());
-            if (self_) {
-                *static_cast<ex::coroutine_handle<>*>(self_) = nullptr;
-                self_->unlock();
-            }
+            ctb_->clear_coro();
             coro_.destroy();
             coro_ = nullptr;
         }
     }
 
-    task& set_self_release() & noexcept {
-        self_release_ = true;
-        return *this;
-    }
-    task&& set_self_release() && noexcept {
-        self_release_ = true;
-        return std::move(*this);
-    }
     ~task() noexcept {
-        if (self_release_)
-            reset();
+        if (ctb_) {
+            AWAITABLE_TASKS_TRACE("%p destroyed", this);
+            if (ctb_->is_self_release())
+                reset();
+        }
     }
 
   public:
@@ -383,14 +375,10 @@ class task {
         typename C = typename detail::CallArgsWith<FF, T>>
     auto then(F&& func) {
         using Arguments = typename C::CallableInfo;
-        set_self_release();
         return then_impl<FF, C>(std::forward<FF>(func), Arguments());
     }
 
-    task<T> then() noexcept {
-        set_self_release();
-        return std::move(*this);
-    }
+    task<T> then() noexcept { return std::move(*this); }
     template<class Callback, class... Callbacks>
     auto then_multi(Callback&& fn, Callbacks&&... fns) noexcept {
         return then(std::forward<Callback>(fn)).then_multi(std::forward<Callbacks>(fns)...);
@@ -405,10 +393,11 @@ class task {
     template<typename>
     friend class scoped_task;
     template<typename>
+    friend class task;
+    template<typename>
     friend class promise_handle;
-    promise_data<>* self_ = nullptr;
-
-    bool self_release_ = false;
+    std::shared_ptr<promise_data<>> ctb_;
+    ex::coroutine_handle<> coro_ = nullptr;
 
     template<bool, typename F, typename R, typename... Args>
     std::enable_if_t<sizeof...(Args) >= 2, void> then_impl(F&& func,
@@ -419,11 +408,15 @@ class task {
     template<typename F, typename R, typename... Args>
     std::enable_if_t<sizeof...(Args) == 1 && R::TaskOrRet::value, typename R::TaskReturn>
     then_impl(F&& func, detail::callable_traits<F(Args...)>) noexcept {
-        return [](task<T> t, std::decay_t<F> f) -> typename R::TaskReturn {
+        auto next = ctb_;
+        R::TaskReturn next_task = [](task<T> t, std::decay_t<F> f) -> typename R::TaskReturn {
             auto&& value = co_await t;
-            return co_await f(value).set_self_release();
+            return co_await f(value);
         }
         (std::move(*this), std::move(func));
+        next_task.ctb_->set_self_release(next->is_self_release());
+        next->next_ = next_task.ctb_;
+        return std::move(next_task);
     }
 
     template<typename F, typename R, typename... Args>
@@ -432,11 +425,15 @@ class task {
                              std::is_same_v<typename R::OrignalRet, void>),
             task<T>>
     then_impl(F&& func, detail::callable_traits<F(Args...)>) noexcept {
-        return [](task<T> t, std::decay_t<F> f) -> task<T> {
+        auto next = ctb_;
+        auto next_task = [](task<T> t, std::decay_t<F> f) -> task<T> {
             auto&& value = co_await t;
-            return co_await f().set_self_release();
+            return co_await f();
             return value;
         }(std::move(*this), std::move(func));
+        next_task.ctb_->set_self_release(next->is_self_release());
+        next->next_ = next_task.ctb_;
+        return std::move(next_task);
     }
 
     template<typename F, typename R, typename... Args>
@@ -445,13 +442,17 @@ class task {
                              !std::is_same_v<typename R::OrignalRet, void>),
             typename R::TaskReturn>
     then_impl(F&& func, detail::callable_traits<F(Args...)>) noexcept {
-        return [](task<T> t, std::decay_t<F> f) -> typename R::TaskReturn {
+        auto next = ctb_;
+        R::TaskReturn next_task = [](task<T> t, std::decay_t<F> f) -> typename R::TaskReturn {
             co_await t;
             auto ff = f();
-            auto&& value = co_await ff.set_self_release();
+            auto&& value = co_await ff;
             return value;
         }
         (std::move(*this), std::move(func));
+        next_task.ctb_->set_self_release(next->is_self_release());
+        next->next_ = next_task.ctb_;
+        return std::move(next_task);
     }
 
     template<typename F, typename R, typename... Args>
@@ -459,11 +460,15 @@ class task {
                          std::is_same_v<typename R::OrignalRet, void>,
             task<T>>
     then_impl(F&& func, detail::callable_traits<F(Args...)>) noexcept {
-        return [](task<T> t, std::decay_t<F> f) -> task<T> {
+        auto next = ctb_;
+        auto next_task = [](task<T> t, std::decay_t<F> f) -> task<T> {
             auto&& value = co_await t;
             f(value);
             return value;
         }(std::move(*this), std::forward<F>(func));
+        next_task.ctb_->set_self_release(next->is_self_release());
+        next->next_ = next_task.ctb_;
+        return std::move(next_task);
     }
 
     template<typename F, typename R, typename... Args>
@@ -471,11 +476,15 @@ class task {
                          !std::is_same_v<typename R::OrignalRet, void>,
             typename R::TaskReturn>
     then_impl(F&& func, detail::callable_traits<F(Args...)>) noexcept {
-        return [](task<T> t, std::decay_t<F> f) -> typename R::TaskReturn {
+        auto next = ctb_;
+        R::TaskReturn next_task = [](task<T> t, std::decay_t<F> f) -> typename R::TaskReturn {
             auto&& value = co_await t;
             return f(value);
         }
         (std::move(*this), std::forward<F>(func));
+        next_task.ctb_->set_self_release(next->is_self_release());
+        next->next_ = next_task.ctb_;
+        return std::move(next_task);
     }
 
     template<typename F, typename R, typename... Args>
@@ -483,12 +492,16 @@ class task {
                          std::is_same_v<typename R::OrignalRet, void>,
             task<T>>
     then_impl(F&& func, detail::callable_traits<F(Args...)>) noexcept {
-        return [](task<T> t, std::decay_t<F> f) -> typename task<T> {
+        auto next = ctb_;
+        auto next_task = [](task<T> t, std::decay_t<F> f) -> typename task<T> {
             auto&& value = co_await t;
             f();
             return value;
         }
         (std::move(*this), std::forward<F>(func));
+        next_task.ctb_->set_self_release(next->is_self_release());
+        next->next_ = next_task.ctb_;
+        return std::move(next_task);
     }
 
     template<typename F, typename R, typename... Args>
@@ -496,11 +509,15 @@ class task {
                          !std::is_same_v<typename R::OrignalRet, void>,
             typename R::TaskReturn>
     then_impl(F&& func, detail::callable_traits<F(Args...)>) noexcept {
-        return [](task<T> t, std::decay_t<F> f) -> typename R::TaskReturn {
+        auto next = ctb_;
+        R::TaskReturn next_task = [](task<T> t, std::decay_t<F> f) -> typename R::TaskReturn {
             co_await t;
             return f();
         }
         (std::move(*this), std::forward<F>(func));
+        next_task.ctb_->set_self_release(next->is_self_release());
+        next->next_ = next_task.ctb_;
+        return std::move(next_task);
     }
 };
 
@@ -511,12 +528,9 @@ template<typename T>
 class scoped_task : public task<T> {
   public:
     scoped_task(task<T>&& t) {
-        this->self_ = std::move(t.self_);
+        this->ctb_ = std::move(t.ctb_);
         this->coro_ = t.coro_;
-        this->self_release_ = true;
-
         t.coro_ = nullptr;
-        t.self_release_ = false;
     }
 };
 
@@ -525,12 +539,9 @@ class scoped_task<void> : public task<detail::Unkown> {
   public:
     template<typename T>
     scoped_task(task<T>&& t) {
-        this->self_ = std::move(t.self_);
+        this->ctb_ = std::move(t.ctb_);
         this->coro_ = t.coro_;
-        this->self_release_ = true;
-
         t.coro_ = nullptr;
-        t.self_release_ = false;
     }
 };
 }
@@ -545,24 +556,24 @@ task<R> make_task() noexcept {
         R ret;
         co_await ex::suspend_if{Suspend};
         return ret;
-    }().set_self_release();
+    }();
 }
-template<typename R, typename Caller>
+template<bool Suspend = true, typename R, typename Caller>
 task<R> make_task(R (Caller::*mem_func)(), Caller* caller) noexcept {
     return [](R (Caller::*memf)(), Caller* cal) -> task<R> {
-        co_await ex::suspend_always{};
+        co_await ex::suspend_if{Suspend};
         return cal->*memf();
-    }(memfunc, caller).set_self_release();
+    }(memfunc, caller);
 }
-template<typename F,
+template<bool Suspend = true,
+    typename F,
     typename FF = typename detail::FunctionReferenceToPointer<F>::type,
     typename R = typename detail::CallArgsWith<FF>::TaskReturn>
 R make_task(F&& func) noexcept {
     return [](FF f) -> R {
-        co_await ex::suspend_always{};
+        co_await ex::suspend_if{Suspend};
         return f();
-    }(std::forward<FF>(func))
-                           .set_self_release();
+    }(std::forward<FF>(func));
 }
 }
 
@@ -603,21 +614,19 @@ typename Ctx::retrun_type when_all(InputIterator first, InputIterator last) {
     tasks.reserve(all_task_count);
 
     for (size_t idx = 0; first != last; ++idx, ++first) {
-        tasks.emplace_back(
-                (*first)
-                    .then([ctx, idx](typename detail::isTaskOrRet<T>::Inner& a) -> detail::Unkown {
-                        auto& data = *ctx;
+        tasks.emplace_back((*first).then([ctx, idx](typename detail::isTaskOrRet<T>::Inner& a)
+                                             -> detail::Unkown {
+            auto& data = *ctx;
 
-                        if (data.task_count != 0) {
-                            data.results[idx] = std::move(a);
+            if (data.task_count != 0) {
+                data.results[idx] = std::move(a);
 
-                            if (--data.task_count == 0) {
-                                data.handle.resume();
-                            }
-                        }
-                        return detail::Unkown{};
-                    })
-                    .set_self_release());
+                if (--data.task_count == 0) {
+                    data.handle.resume();
+                }
+            }
+            return detail::Unkown{};
+        }));
     }
 
     auto ret = [](bool suspend,
@@ -671,20 +680,19 @@ typename Ctx::retrun_type when_n(InputIterator first, InputIterator last, size_t
 
     for (size_t idx = 0; first != last; ++idx, ++first) {
         tasks.emplace_back(
-                (*first)
-                    .then([ctx, idx](typename detail::isTaskOrRet<T>::Inner& a) -> decltype(auto) {
-                        auto& data = *ctx;
+                (*first).then([ctx, idx](typename detail::isTaskOrRet<T>::Inner& a) -> decltype(
+                                                                                        auto) {
+                    auto& data = *ctx;
 
-                        if (data.task_count != 0) {
-                            data.set_result(idx, a);
+                    if (data.task_count != 0) {
+                        data.set_result(idx, a);
 
-                            if (--data.task_count == 0) {
-                                data.handle.resume();
-                            }
+                        if (--data.task_count == 0) {
+                            data.handle.resume();
                         }
-                        return detail::Unkown{};
-                    })
-                    .set_self_release());
+                    }
+                    return detail::Unkown{};
+                }));
     }
 
     auto ret = [](bool suspend,
@@ -754,7 +762,7 @@ typename Ctx::task_type when_all_impl(std::index_sequence<Is...>, Ts&... ts) {
     (ctx, std::move(task_transform(ts, [ctx](typename detail::isTaskOrRet<Ts>::Inner a) -> Unkown {
         ctx->set_variadic_result<Is>(a);
         return Unkown{};
-    })).set_self_release()...);
+    }))...);
     ctx->handle = ret.get_promise_handle();
     return ret;
 }
