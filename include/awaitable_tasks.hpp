@@ -218,9 +218,9 @@ class promise_handle : public promise_handle<> {
         return *this;
     }
 
-    promise<T>* get_promise() noexcept {
+    T* get_promise() noexcept {
         if (valid()) {
-            auto hand = static_cast<ex::coroutine_handle<T>*>(handle_.get());
+            auto hand = (ex::coroutine_handle<T>*)(handle_.get());
             return &(hand->promise());
         } else {
             return nullptr;
@@ -231,7 +231,7 @@ class promise_handle : public promise_handle<> {
     void set_value(U&& value) {
         auto prom = get_promise();
         if (prom) {
-            prom->set_value(std::forward<U>(value));
+            *prom = std::forward<U>(value);
             resume();
         }
     }
