@@ -109,14 +109,17 @@ struct promise_data<void> : public ex::coroutine_handle<void> {
     void clear_coro() { *static_cast<ex::coroutine_handle<>*>(this) = nullptr; }
     void destroy_context() {
         if (!self_release_) {
-            auto target = next_;
-            if (!target) {
-                destroy();
+            if (next_) {
+				if(valid())
+					destroy();
             } else {
+				auto target = next_;
                 while (target->next_)
                     target = target->next_;
+				if(target->valid())
+					target->destroy();
             }
-            target->destroy();
+            
         }
     }
 
