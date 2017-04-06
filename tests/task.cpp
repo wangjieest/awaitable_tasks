@@ -24,7 +24,7 @@ int main() {
     };
 
     {
-        auto old_task = awaitable_tasks::make_task();
+        auto old_task = awaitable_tasks::make_task(func);
         auto old_task_handle = old_task.get_promise_handle();
         old_task_handle.cancel_self_release();
         { auto new_task = old_task.then(func); }
@@ -33,7 +33,7 @@ int main() {
     }
 
     {
-        auto old_task = awaitable_tasks::make_task();
+        auto old_task = awaitable_tasks::make_task(func);
         auto old_task_handle = old_task.get_promise_handle();
 //         old_task_handle.cancel_self_release();
         { auto new_task = old_task.then(func); }
@@ -43,7 +43,7 @@ int main() {
 
     // for C interface
     {
-        auto old_task = awaitable_tasks::make_task();
+        auto old_task = awaitable_tasks::make_task(func);
         auto old_task_handle = old_task.get_promise_handle();
         auto new_task = old_task.then(func);
         old_task_handle.resume();
