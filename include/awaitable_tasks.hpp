@@ -1,5 +1,5 @@
 #pragma once
-#if 1
+#if 0
 #define AWAITABLE_TASKS_TRACE(fmt, ...) printf("\n" fmt "\n", ##__VA_ARGS__)
 #else
 #define AWAITABLE_TASKS_TRACE(fmt, ...)
@@ -150,7 +150,7 @@ struct promise_data : promise_data<void> {
  protected:
   promise<T>* get_promise() noexcept {
     if (valid()) {
-      auto hand = static_cast<ex::coroutine_handle<T>*>(this);
+      auto hand = reinterpret_cast<ex::coroutine_handle<promise<T>>*>(this);
       return &(hand->promise());
     } else {
       return nullptr;
@@ -231,21 +231,11 @@ class promise_handle : public promise_handle<> {
     return *this;
   }
 
-  T* get_promise() noexcept {
-    if (valid()) {
-      auto hand = (ex::coroutine_handle<T>*)(handle_.get());
-      return &(hand->promise());
-    } else {
-      return nullptr;
-    }
-  }
-
   template <typename U>
   void set_value(U&& value) {
-    auto prom = get_promise();
-    if (prom) {
-      *prom = std::forward<U>(value);
-      resume();
+    if (valid()) {
+      auto hand = reinterpret_cast<promise_data<T>*>(handle_.get());
+      hand->set_value(std::forward<U>(value));
     }
   }
 

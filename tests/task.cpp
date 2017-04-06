@@ -28,8 +28,7 @@ int main() {
         auto old_task_handle = old_task.get_promise_handle();
         old_task_handle.cancel_self_release();
         { auto new_task = old_task.then(func); }
-        old_task_handle.resume();
-        // auto v = new_task.cur_value_ref();
+        old_task_handle.resume(); // callback and destroy coro
     }
 
     {
@@ -37,8 +36,7 @@ int main() {
         auto old_task_handle = old_task.get_promise_handle();
 //         old_task_handle.cancel_self_release();
         { auto new_task = old_task.then(func); }
-        old_task_handle.resume();
-        // auto v = new_task.cur_value_ref();
+        old_task_handle.resume(); // do nothing
     }
 
     // for C interface
