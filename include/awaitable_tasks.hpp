@@ -265,11 +265,10 @@ class promise<void> {
       bool await_ready() noexcept { return false; }
       void await_suspend(ex::coroutine_handle<>) noexcept {
         // if suspend by caller , then resume to it.
-		  if (me->caller_coro_) {
-			  AWAITABLE_TASKS_TRACE("resumed %p", me->caller_coro_.address());
-			  me->caller_coro_.resume();
-			  me->caller_coro_ = nullptr;
-		  }
+        if (me->caller_coro_) {
+          AWAITABLE_TASKS_TRACE("resumed %p", me->caller_coro_.address());
+          me->caller_coro_.resume();
+        }
       }
       void await_resume() noexcept {}
     };
