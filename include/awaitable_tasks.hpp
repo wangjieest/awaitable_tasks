@@ -4,7 +4,7 @@
 #else
 #define AWAITABLE_TASKS_TRACE(fmt, ...)
 #endif
-
+#define AWAITABLE_TASKS_EXCEPTION 1
 #include <experimental/resumable>
 #include <memory>
 #include <atomic>
@@ -138,14 +138,23 @@ struct promise_data : promise_data<void> {
     *static_cast<ex::coroutine_handle<>*>(this) = coro;
   }
 
-  template <typename V>
-  void set_value(V&& v) {
+//   template <typename V>
+//   void set_value(V&& v) {
+//     auto prom = get_promise();
+//     if (prom) {
+//       prom->set_value(std::forward<V>(v));
+//       resume();
+//     }
+//   }
+
+#if AWAITABLE_TASKS_EXCEPTION
+  void set_exception(std::exception_ptr eptr) {
     auto prom = get_promise();
     if (prom) {
-      prom->set_value(std::forward<V&&>(v));
-      resume();
+      prom->set_exception(std::move(eptr));
     }
   }
+#endif
 
  protected:
   promise<T>* get_promise() noexcept {
@@ -224,25 +233,31 @@ class promise_handle : public promise_handle<> {
     handle_ = rhs.handle_;
   }
   promise_handle(promise_handle&& rhs) noexcept {
-    std::swap(handle_, rhs.handle_);
+    handle_ = std::move(rhs.handle_);
   }
   promise_handle& operator=(promise_handle&& rhs) noexcept {
-    std::swap(handle_, rhs.handle_);
+    handle_ = std::move(rhs.handle_);
     return *this;
   }
 
-  template <typename U>
-  void set_value(U&& value) {
-    if (valid()) {
-      auto hand = reinterpret_cast<promise_data<T>*>(handle_.get());
-      hand->set_value(std::forward<U>(value));
-    }
+#if AWAITABLE_TASKS_EXCEPTION
+  void set_exception(std::exception_ptr eptr) {
+    auto hand = reinterpret_cast<promise_data<T>*>(handle_.get());
+    hand->set_exception(std::move(eptr));
   }
+#endif
 
-  template <typename U>
-  void operator()(U&& value) {
-    set_value(std::forward<U>(value));
-  }
+//   template <typename U>
+//   void set_value(U&& value) {
+//     if (valid()) {
+//       auto hand = reinterpret_cast<promise_data<T>*>(handle_.get());
+//       hand->set_value(std::forward<U>(value));
+//     }
+//   }
+//   template <typename U>
+//   void operator()(U&& value) {
+//     set_value(std::forward<U>(value));
+//   }
 };
 
 template <>
@@ -253,10 +268,11 @@ class promise<void> {
     struct final_awaiter {
       promise* me;
       bool await_ready() noexcept { return false; }
-      void await_suspend(ex::coroutine_handle<>) noexcept {
+      void await_suspend(ex::coroutine_handle<> coro) noexcept {
         // if suspend by caller , then resume to it.
         if (me->caller_coro_) {
-          AWAITABLE_TASKS_TRACE("resumed %p", me->caller_coro_.address());
+          AWAITABLE_TASKS_TRACE("%p <-- %p", me->caller_coro_.address(),
+                                coro.address());
           me->caller_coro_.resume();
         }
       }
@@ -266,12 +282,24 @@ class promise<void> {
   }
 
   void set_caller(ex::coroutine_handle<> caller_coro) noexcept {
-    AWAITABLE_TASKS_TRACE("awaited %p", caller_coro.address());
     caller_coro_ = caller_coro;
   }
 
- private:
+#if AWAITABLE_TASKS_EXCEPTION
+  void set_exception(std::exception_ptr eptr) {
+    exception_ = std::move(eptr);
+  }
+  void throw_if_exception() const {
+    if (exception_)
+      std::rethrow_exception(exception_);
+  }
+#endif
+
+ protected:
   ex::coroutine_handle<> caller_coro_;
+#if AWAITABLE_TASKS_EXCEPTION
+  std::exception_ptr exception_;
+#endif
 };
 
 template <typename T>
@@ -279,25 +307,25 @@ class promise : public promise<> {
  public:
   using result_t = T;
   using task_t = task<result_t>;
-
-  promise& get_return_object() noexcept { return *this; }
+  friend class task_t;
+  promise& get_return_object() noexcept {
+    //
+    return *this;
+  }
   template <typename U>
   void return_value(U&& value) {
     result_ = std::forward<U>(value);
   }
 
-  template <typename U>
-  U&& await_transform(U&& whatever) noexcept {
-    return std::forward<U>(whatever);
-  }
+//   template <typename U>
+//   U&& await_transform(U&& whatever) {
+//     return std::forward<U>(whatever);
+//   }
 
-  template <typename U>
-  void set_value(U&& value) noexcept {
-    result_ = std::forward<U>(value);
-  }
-
-  // can ref the value at any time
-  T& cur_value_ref() noexcept { return result_; }
+//   template <typename U>
+//   void set_value(U&& value) noexcept {
+//     result_ = std::forward<U>(value);
+//   }
 
  private:
   T result_;
@@ -309,16 +337,26 @@ class task {
   using promise_type = promise<T>;
 
   bool await_ready() noexcept { return is_ready(); }
+#if AWAITABLE_TASKS_EXCEPTION
+  T await_resume() {
+    auto coro = *static_cast<ex::coroutine_handle<promise_type>*>(&coro_);
+    coro.promise().throw_if_exception();
+    return std::move(cur_value_ref());
+  }
+#else
   T await_resume() noexcept { return std::move(cur_value_ref()); }
+#endif
+
   void await_suspend(ex::coroutine_handle<> caller_coro) noexcept {
-    auto coro = static_cast<ex::coroutine_handle<promise_type>*>(&coro_);
-    coro->promise().set_caller(caller_coro);
+    auto coro = *static_cast<ex::coroutine_handle<promise_type>*>(&coro_);
+    coro.promise().set_caller(caller_coro);
+    AWAITABLE_TASKS_TRACE("%p --> %p", caller_coro.address(), coro_.address());
   }
 
   explicit task(promise_type& prom) noexcept
       : coro_(ex::coroutine_handle<>::from_address(
             ex::coroutine_handle<promise_type>::from_promise(prom).address())) {
-    AWAITABLE_TASKS_TRACE("task created %p", this);
+//     AWAITABLE_TASKS_TRACE("task created %p", this);
     AWAITABLE_TASKS_TRACE("coro created %p", coro_.address());
     ctb_ = std::make_shared<promise_data<>>(coro_);
   }
@@ -353,7 +391,7 @@ class task {
 
   ~task() noexcept {
     if (ctb_) {
-      AWAITABLE_TASKS_TRACE("task destroyed %p", this);
+//       AWAITABLE_TASKS_TRACE("task destroyed %p", this);
       if (ctb_->is_self_release())
         reset();
     }
@@ -373,7 +411,7 @@ class task {
   T& cur_value_ref() noexcept {
     if (coro_) {
       auto& coro = *static_cast<ex::coroutine_handle<promise_type>*>(&coro_);
-      return coro.promise().cur_value_ref();
+      return coro.promise().result_;
     } else {
       // as task are moved.
       static T empty{};
@@ -571,23 +609,6 @@ class scoped_task<void> : public task<detail::Unkown> {
 
 // make_task
 namespace awaitable_tasks {
-template <typename T = void,
-          bool Suspend = true,
-          typename R = typename detail::isTaskOrRet<T>::Inner>
-task<R> make_task() noexcept {
-  return []() -> task<R> {
-    R ret;
-    co_await ex::suspend_if{Suspend};
-    return ret;
-  }();
-}
-template <bool Suspend = true, typename R, typename Caller>
-task<R> make_task(R (Caller::*mem_func)(), Caller* caller) noexcept {
-  return [](R (Caller::*memf)(), Caller* cal) -> task<R> {
-    co_await ex::suspend_if{Suspend};
-    return cal->*memf();
-  }(memfunc, caller);
-}
 template <bool Suspend = true,
           typename F,
           typename FF = typename detail::FunctionReferenceToPointer<F>::type,
