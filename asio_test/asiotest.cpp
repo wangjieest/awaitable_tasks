@@ -149,23 +149,24 @@ awaitable_tasks::task<asio::error_code> make_http(asio::io_service& io_service,
                                                   const std::string& path) {
   asio::error_code err;
   try {
-    // Start an asynchronous resolve to translate the server and service names
-    // into a list of endpoints.
-    tcp::resolver::query query(server, "http");
-    tcp::resolver resolver_(io_service);
-    auto resolver_ret = co_await resolver_.async_resolve(query, asio::use_task);
-
-    // Attempt a connection to each endpoint in the list until we
-    // successfully establish a connection.
-    tcp::socket socket_(io_service);
-    co_await asio::async_connect(socket_, resolver_ret, asio::use_task);
-
     asio::streambuf request_;
     std::ostream request_stream(&request_);
     request_stream << "GET " << path << " HTTP/1.0\r\n";
     request_stream << "Host: " << server << "\r\n";
     request_stream << "Accept: */*\r\n";
     request_stream << "Connection: close\r\n\r\n";
+
+    // Start an asynchronous resolve to translate the server and service names
+    // into a list of endpoints.
+    tcp::resolver::query query(server, "http");
+    tcp::resolver resolver_(io_service);
+    tcp::socket socket_(io_service);
+    auto resolver_ret = co_await resolver_.async_resolve(query, asio::use_task);
+
+    // Attempt a connection to each endpoint in the list until we
+    // successfully establish a connection.
+    co_await asio::async_connect(socket_, resolver_ret, asio::use_task);
+
     co_await asio::async_write(socket_, request_, asio::use_task);
 
     asio::streambuf response_;
@@ -231,10 +232,18 @@ awaitable_tasks::task<asio::error_code> make_http(asio::io_service& io_service,
                                                   const std::string& path) {
   asio::error_code err;
 
+  asio::streambuf request_;
+  std::ostream request_stream(&request_);
+  request_stream << "GET " << path << " HTTP/1.0\r\n";
+  request_stream << "Host: " << server << "\r\n";
+  request_stream << "Accept: */*\r\n";
+  request_stream << "Connection: close\r\n\r\n";
+  tcp::socket socket_(io_service);
+  tcp::resolver resolver_(io_service);
+  tcp::resolver::query query(server, "http");
+
   // Start an asynchronous resolve to translate the server and service names
   // into a list of endpoints.
-  tcp::resolver::query query(server, "http");
-  tcp::resolver resolver_(io_service);
   auto t1 = resolver_.async_resolve(query, asio::use_task);
   auto resolver_ret = co_await t1;
 
@@ -244,19 +253,11 @@ awaitable_tasks::task<asio::error_code> make_http(asio::io_service& io_service,
 
   // Attempt a connection to each endpoint in the list until we
   // successfully establish a connection.
-  tcp::socket socket_(io_service);
   auto&& connect_ret = co_await asio::async_connect(
       socket_, std::get<1>(resolver_ret), asio::use_task);
   err = std::get<0>(connect_ret);
   if (err)
     return err;
-
-  asio::streambuf request_;
-  std::ostream request_stream(&request_);
-  request_stream << "GET " << path << " HTTP/1.0\r\n";
-  request_stream << "Host: " << server << "\r\n";
-  request_stream << "Accept: */*\r\n";
-  request_stream << "Connection: close\r\n\r\n";
 
   auto&& write_ret =
       co_await asio::async_write(socket_, request_, asio::use_task);
@@ -324,20 +325,21 @@ awaitable_tasks::task<asio::error_code> make_http(asio::io_service& io_service,
 
 int main(int argc, char* argv[]) {
   try {
-    if (argc != 3) {
-      std::cout << "Usage: async_client <server> <path>\n";
-      std::cout << "Example:\n";
-      std::cout << "  async_client www.boost.org /LICENSE_1_0.txt\n";
-      return 1;
+    auto path = "www.boost.org";
+    auto server = "/LICENSE_1_0.txt";
+    if (argc == 3) {
+      path = argv[1];
+      server = argv[2];
     }
+    //{
+    // 			asio::io_service io_service;
+    //
+    // 			client c(io_service, path, server);
+    // 			io_service.run();
+    //)
     {
-        // 			asio::io_service io_service;
-        //
-        // 			client c(io_service, argv[1], argv[2]);
-        // 			io_service.run();
-    } {
       asio::io_service io_service;
-      auto t = make_http(io_service, argv[1], argv[2]);
+      auto t = make_http(io_service, path, server);
       io_service.run();
     }
 
