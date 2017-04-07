@@ -8,8 +8,8 @@
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
 //
 
-#ifndef ASIO_use_task_HPP
-#define ASIO_use_task_HPP
+#ifndef ASIO_USE_TASK_HPP
+#define ASIO_USE_TASK_HPP
 
 #if defined(_MSC_VER) && (_MSC_VER >= 1200)
 # pragma once
@@ -93,4 +93,4 @@ __declspec(selectany) use_task_t<> use_task;
 
 #include "use_task_impl.hpp"
 
-#endif // ASIO_use_task_HPP
+#endif // ASIO_USE_TASK_HPP

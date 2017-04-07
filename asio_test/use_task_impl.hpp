@@ -1,5 +1,5 @@
 //
-// impl/use_task.hpp
+// use_task_impl.hpp
 // ~~~~~~~~~~~~~~~~~~~
 //
 // Copyright (c) 2003-2015 Christopher M. Kohlhoff (chris at kohlhoff dot com)
@@ -8,8 +8,8 @@
 // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
 //
 
-#ifndef ASIO_IMPL_use_task_HPP
-#define ASIO_IMPL_use_task_HPP
+#ifndef ASIO_USE_TASK_IMPL_HPP
+#define ASIO_USE_TASK_IMPL_HPP
 
 #if defined(_MSC_VER) && (_MSC_VER >= 1200)
 # pragma once
@@ -131,8 +131,7 @@ namespace detail {
 	std::shared_ptr<data > data_;
   };
 
-  // Ensure any exceptions thrown from the handler are propagated back to the
-  // caller via the future.
+  // Ensure any exceptions thrown from the handler are propagated back to the caller when possible.
   template <typename Function, typename T>
   void asio_handler_invoke(Function f, promise_handler<T>* h)
   {
@@ -213,4 +212,4 @@ struct handler_type<use_task_t<Allocator>,
 
 #include "asio/detail/pop_options.hpp"
 
-#endif // ASIO_IMPL_use_task_HPP
+#endif // ASIO_USE_TASK_IMPL_HPP
