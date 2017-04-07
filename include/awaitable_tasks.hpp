@@ -1,5 +1,5 @@
 #pragma once
-#if 0
+#if 1
 #define AWAITABLE_TASKS_TRACE(fmt, ...) printf("\n" fmt "\n", ##__VA_ARGS__)
 #else
 #define AWAITABLE_TASKS_TRACE(fmt, ...)
@@ -796,7 +796,7 @@ struct when_all_variadic_context {
 };
 
 template <typename T, typename F>
-inline decltype(auto) task_transform(T& t, F& f) {
+inline decltype(auto) task_transform(T& t, F&& f) {
   return t.then(std::move(f));
 }
 template <size_t I>

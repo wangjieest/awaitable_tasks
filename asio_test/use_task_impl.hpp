@@ -39,7 +39,7 @@ namespace detail {
 #endif
     // Construct from use_task special value.
     template <typename Allocator>
-    promise_handler(use_task_t<Allocator> uf)
+    promise_handler(use_task_t<Allocator> /*uf*/)
     {
 		auto tmp = std::make_shared<data>();
 		data_ = tmp;

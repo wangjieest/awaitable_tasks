@@ -5,7 +5,7 @@
 #include <string>
 #include <iostream>
 #include "../include/awaitable_tasks.hpp"
-
+#pragma warning(disable:4100 4189)
 int g_data = 42;
 
 int main() {

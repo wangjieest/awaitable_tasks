@@ -81,7 +81,10 @@ private:
 #if defined(ASIO_HAS_CONSTEXPR) || defined(GENERATING_DOCUMENTATION)
 // constexpr use_task_t<> use_task;
 // #elif defined(ASIO_MSVC)
+#pragma warning(push)
+#pragma warning(disable:4592)
 __declspec(selectany) use_task_t<> use_task;
+#pragma warning(pop)
 #endif
 
 } // namespace asio
