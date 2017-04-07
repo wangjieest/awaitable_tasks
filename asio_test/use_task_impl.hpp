@@ -24,6 +24,21 @@
 
 #include "awaitable_tasks.hpp"
 
+#define ASIO_TASKS_EXCEPTION 0
+#define ASIO_TASKS_VARIANT 1
+#define ASIO_TASKS_TUPLE 2
+
+#define ASIO_TASK_IMPL ASIO_TASKS_EXCEPTION
+
+
+#ifndef ASIO_TASK_IMPL
+#define ASIO_TASK_IMPL ASIO_TASKS_EXCEPTION
+#endif
+
+#if ASIO_TASK_IMPL == ASIO_TASKS_VARIANT 
+#include "mapbox/include/mapbox/variant.hpp"
+#endif
+
 namespace asio {
 namespace detail {
 
@@ -32,9 +47,11 @@ namespace detail {
   class promise_handler
   {
   public:
-#if AWAITABLE_TASKS_EXCEPTION
+#if ASIO_TASK_IMPL == ASIO_TASKS_EXCEPTION
 	  using result_type_t = T;
-#else
+#elif ASIO_TASK_IMPL == ASIO_TASKS_VARIANT 
+	  using result_type_t = mapbox::util::variant<T, asio::error_code>;
+#elif ASIO_TASK_IMPL == ASIO_TASKS_TUPLE
 	  using result_type_t = std::tuple<asio::error_code, T>;
 #endif
     // Construct from use_task special value.
@@ -49,27 +66,36 @@ namespace detail {
 
     void operator()(T t)
     {
-#if AWAITABLE_TASKS_EXCEPTION
-		data_->value_ = std::move(t);
-#else
-		data_->value_ = result_type_t(asio::error_code(), std::move(t));
+#if ASIO_TASK_IMPL == ASIO_TASKS_EXCEPTION
+	  data_->promise_handle_.set_value(std::move(t));
+#elif ASIO_TASK_IMPL == ASIO_TASKS_VARIANT 
+	  data_->promise_handle_.set_value(std::move(t));
+#elif ASIO_TASK_IMPL == ASIO_TASKS_TUPLE
+	  data_->promise_handle_.set_value(result_type_t(asio::error_code(), std::move(t)));
 #endif
-		data_->promise_handle_.resume();
+	  data_->promise_handle_.resume();
     }
 
     void operator()(const asio::error_code& ec, T t)
     {
-#if AWAITABLE_TASKS_EXCEPTION
-		if (ec) {
-			data_->promise_handle_.set_exception(
-				std::make_exception_ptr(asio::system_error(ec)));
+        if (ec) {
+#if ASIO_TASK_IMPL == ASIO_TASKS_EXCEPTION
+			data_->promise_handle_.set_exception(std::make_exception_ptr(asio::system_error(ec)));
+#elif ASIO_TASK_IMPL == ASIO_TASKS_VARIANT 
+			data_->promise_handle_.set_value(asio::system_error(ec));
+#elif ASIO_TASK_IMPL == ASIO_TASKS_TUPLE
+			data_->promise_handle_.set_value(result_type_t(ec, std::move(t)));
+#endif
 		}
 		else {
-			data_->value_ = std::move(t);
-		}
-#else
-		data_->value_ = result_type_t(ec, std::move(t));
+#if ASIO_TASK_IMPL == ASIO_TASKS_EXCEPTION
+	  data_->promise_handle_.set_value(std::move(t));
+#elif ASIO_TASK_IMPL == ASIO_TASKS_VARIANT 
+	  data_->promise_handle_.set_value(std::move(t));
+#elif ASIO_TASK_IMPL == ASIO_TASKS_TUPLE
+	  data_->promise_handle_.set_value(result_type_t(asio::error_code(), std::move(t)));
 #endif
+		}
 		data_->promise_handle_.resume();
     }
 
@@ -79,7 +105,7 @@ namespace detail {
 		awaitable_tasks::task<result_type_t> task_;
 		result_type_t value_;
 	};
-    std::shared_ptr<data > data_;
+    std::shared_ptr<data> data_;
   };
 
   // Completion handler to adapt a void promise as a completion handler.
@@ -87,38 +113,40 @@ namespace detail {
   class promise_handler<void>
   {
   public:
-#if AWAITABLE_TASKS_EXCEPTION
+#if ASIO_TASK_IMPL == ASIO_TASKS_EXCEPTION
 	  using result_type_t = asio::error_code;
-#else
-	  using result_type_t = asio::error_code;;
+#elif ASIO_TASK_IMPL == ASIO_TASKS_VARIANT 
+	  using result_type_t = asio::error_code;
+#elif ASIO_TASK_IMPL == ASIO_TASKS_TUPLE
+	  using result_type_t = asio::error_code;
 #endif
 	  
 	  // Construct from use_task special value. Used during rebinding.
     template <typename Allocator>
-    promise_handler(use_task_t<Allocator> uf)
+    promise_handler(use_task_t<Allocator> /*uf*/)
     {
-		data_ = std::make_shared<data>();
-		data_->task_ = awaitable_tasks::make_task<result_type_t>();
+		auto tmp = std::make_shared<data>();
+		data_ = tmp;
+		data_->task_ = awaitable_tasks::make_task([tmp]()->result_type_t {return std::move(tmp->value_); });
 		data_->promise_handle_ = data_->task_.get_promise_handle();
     }
 
     void operator()()
     {
-		data_->promise_handle_.resume();
+	  data_->promise_handle_.resume();
 	}
 
 	void operator()(const asio::error_code& ec)
 	{
-#if AWAITABLE_TASKS_EXCEPTION
 		if (ec) {
+#if ASIO_TASK_IMPL == ASIO_TASKS_EXCEPTION
 			data_->promise_handle_.set_exception(std::make_exception_ptr(asio::system_error(ec)));
-		}
-		else {
-			data_->value_ = std::move(ec);
-		}
-#else
-		data_->value_ = std::move(ec);
+#elif ASIO_TASK_IMPL == ASIO_TASKS_VARIANT 
+			data_->promise_handle_.set_value(ec);
+#elif ASIO_TASK_IMPL == ASIO_TASKS_TUPLE
+			data_->promise_handle_.set_value(ec);
 #endif
+		}
 		data_->promise_handle_.resume();
 	}
 
@@ -128,7 +156,7 @@ namespace detail {
 		awaitable_tasks::task<result_type_t> task_;
 		result_type_t value_;
 	};
-	std::shared_ptr<data > data_;
+	std::shared_ptr<data> data_;
   };
 
   // Ensure any exceptions thrown from the handler are propagated back to the caller when possible.
@@ -136,7 +164,6 @@ namespace detail {
   void asio_handler_invoke(Function f, promise_handler<T>* h)
   {
     auto p(h->data_);
-#if AWAITABLE_TASKS_EXCEPTION
 	try
     {
       f();
@@ -145,9 +172,6 @@ namespace detail {
     {
       p->promise_handle_.set_exception(std::current_exception());
     }
-#else
-	f();
-#endif
   }
 
 } // namespace detail
@@ -192,16 +216,14 @@ struct handler_type<use_task_t<Allocator>, ReturnType(Arg1)>
 
 // Handler type specialisation for use_task.
 template <typename Allocator, typename ReturnType>
-struct handler_type<use_task_t<Allocator>,
-    ReturnType(asio::error_code)>
+struct handler_type<use_task_t<Allocator>, ReturnType(asio::error_code)>
 {
   typedef detail::promise_handler<void> type;
 };
 
 // Handler type specialisation for use_task.
 template <typename Allocator, typename ReturnType, typename Arg2>
-struct handler_type<use_task_t<Allocator>,
-    ReturnType(asio::error_code, Arg2)>
+struct handler_type<use_task_t<Allocator>, ReturnType(asio::error_code, Arg2)>
 {
   typedef detail::promise_handler<Arg2> type;
 };

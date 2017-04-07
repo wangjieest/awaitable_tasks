@@ -20,6 +20,7 @@
 #include "asio/detail/push_options.hpp"
 
 #include "awaitable_tasks.hpp"
+#include "mapbox/include/mapbox/variant.hpp"
 
 namespace asio {
 

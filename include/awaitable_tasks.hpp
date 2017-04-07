@@ -2,13 +2,12 @@
 #include <experimental/resumable>
 #include <memory>
 #include <atomic>
+
 #if 1
 #define AWAITABLE_TASKS_TRACE(fmt, ...) printf("\n" fmt "\n", ##__VA_ARGS__)
 #else
 #define AWAITABLE_TASKS_TRACE(fmt, ...)
 #endif
-#define AWAITABLE_TASKS_EXCEPTION 1
-#define AWAITABLE_TASKS_VARIANT 1
 
 namespace awaitable_tasks {
 namespace ex = std::experimental;
@@ -168,7 +167,7 @@ class promise_handle<void> {
             ctb_->set_self_release(false);
     }
     ~promise_handle() {
-        if (ctb_)
+        if (ctb_ &&  !ctb_->is_self_release())
             ctb_->destroy_chain();
     }
 
@@ -184,119 +183,111 @@ class promise_handle : public promise_handle<> {
         ret.ctb_ = t.ctb_;
         return ret;
     }
+	template<typename U>
+	void set_value(U&& value) {
+		auto prom =
+			(static_cast<
+				ex::coroutine_handle<promise<T>>*>(static_cast<ex::coroutine_handle<>*>(ctb_.get()))
+				->promise());
+		prom.result_ = std::move(value);
+	}
+
     void set_exception(std::exception_ptr eptr) {
         auto prom =
             (static_cast<
                 ex::coroutine_handle<promise<T>>*>(static_cast<ex::coroutine_handle<>*>(ctb_.get()))
                     ->promise());
         prom.eptr_ = std::move(eptr);
-        prom.set_value();
     }
-};
-
-template<>
-class promise<void> {
-  public:
-    auto initial_suspend() noexcept { return ex::suspend_never{}; }
-    auto final_suspend() noexcept {
-        struct final_awaiter {
-            promise* me;
-            bool await_ready() noexcept { return false; }
-            void await_suspend(ex::coroutine_handle<>) noexcept { me->set_value(); }
-            void await_resume() noexcept {}
-        };
-        return final_awaiter{this};
-    }
-    void set_caller(ex::coroutine_handle<> caller_coro) noexcept { caller_coro_ = caller_coro; }
-#if AWAITABLE_TASKS_EXCEPTION
-    void set_exception(std::exception_ptr eptr) {
-        eptr_ = std::move(eptr);
-        set_value();
-    }
-    void throw_if_exception() const {
-        if (eptr_)
-            std::rethrow_exception(eptr_);
-    }
-#endif
-    void set_value() {
-        if (caller_coro_)
-            caller_coro_.resume();
-    }
-
-  protected:
-    template<typename>
-    friend class promise_handle;
-    promise() = default;
-    ~promise() { AWAITABLE_TASKS_TRACE("promise destroy %p", this); }
-    std::exception_ptr eptr_;
-    ex::coroutine_handle<> caller_coro_;
 };
 
 template<typename T>
-class promise : public promise<void> {
+class promise {
   public:
-    using promise<>::set_value;
+    using result_type = T;
     promise& get_return_object() noexcept { return *this; }
     template<typename U>
     void return_value(U&& value) {
         result_ = std::forward<U>(value);
     }
+    auto initial_suspend() noexcept { return ex::suspend_never{}; }
+    auto final_suspend() noexcept {
+        struct final_awaiter {
+            promise* me;
+            bool await_ready() noexcept { return false; }
+            void await_suspend(ex::coroutine_handle<>) noexcept {
+                if (me->caller_coro_)
+                    me->caller_coro_.resume();
+            }
+            void await_resume() noexcept {}
+        };
+        return final_awaiter{this};
+    }
+
     template<typename U>
     void set_value(U&& value) {
-        result_ = std::forward<U>(value);
-        set_value();
+        result_ = std::move(value);
     }
-    T result_;
+    void set_eptr(std::exception_ptr eptr) { eptr_ = std::move(eptr); }
+
+    void set_exception(std::exception_ptr eptr) { set_eptr(std::move(eptr)); }
+
+    void throw_if_exception() const {
+        if (eptr_)
+            std::rethrow_exception(eptr_);
+    }
+
+    template<typename>
+    friend class promise_handle;
+    promise() { AWAITABLE_TASKS_TRACE("promise created %p", this); }
+    ~promise() { AWAITABLE_TASKS_TRACE("promise destroy %p", this); }
+    void set_caller(ex::coroutine_handle<> caller_coro) noexcept { caller_coro_ = caller_coro; }
+    ex::coroutine_handle<> caller_coro_;
+    result_type result_;
+    std::exception_ptr eptr_;
 };
 
 template<typename T>
 class task {
   public:
-    using result_type = detail::Unkown::Void_To_Unkown<T>;
-    using promise_type = promise<result_type>;
-
+    using value_type = T;
+    using promise_type = promise<value_type>;
     bool await_ready() noexcept { return is_ready(); }
-
-#if AWAITABLE_TASKS_EXCEPTION
-    result_type&& await_resume() {
+    value_type&& await_resume() {
         get_promise()->throw_if_exception();
         return std::move(cur_value_ref());
     }
-#else
-    result_type&& await_resume() noexcept { return std::move(cur_value_ref()); }
-#endif
-
     void await_suspend(ex::coroutine_handle<> caller_coro) noexcept {
         auto prom = get_promise();
         if (prom) {
             prom->set_caller(caller_coro);
         }
     }
-
     explicit task(promise_type& prom) noexcept {
-        auto coro =
-            ex::coroutine_handle<>::from_address(
-                                        ex::coroutine_handle<promise_type>::from_promise(prom)
-                                            .address());
-        AWAITABLE_TASKS_TRACE("promise created %p", &prom);
-        ctb_ = std::make_shared<shared_state>(coro);
+		coro_ = ex::coroutine_handle<promise_type>::from_promise(prom);
+        ctb_ = std::make_shared<shared_state>(coro_);
     }
 
     task() = default;
     task(task const&) = delete;
     task& operator=(task const&) = delete;
-    task(task&& rhs) noexcept : ctb_(std::move(rhs.ctb_)) {}
+    task(task&& rhs) noexcept : ctb_(std::move(rhs.ctb_)), coro_(std::move(rhs.coro_)) {
+        rhs.coro_ = nullptr;
+    }
     task& operator=(task&& rhs) noexcept {
         if (&rhs != this) {
             ctb_ = std::move(rhs.ctb_);
+			coro_ = std::move(rhs.coro_);
+			rhs.coro_ = nullptr;
         }
         return *this;
     }
 
     void reset() noexcept {
-        if (ctb_ && ctb_->valid()) {
-            ctb_->destroy();
-            ctb_->clear_coro();
+        if (coro_) {
+			ctb_->clear_coro();
+			coro_.destroy();
+			coro_ = nullptr;
         }
     }
 
@@ -306,23 +297,23 @@ class task {
     }
 
   public:
-    promise_handle<result_type> get_promise_handle() noexcept {
-        return promise_handle<result_type>::from_task(*this);
+    promise_handle<value_type> get_promise_handle() noexcept {
+        return promise_handle<value_type>::from_task(*this);
     }
 
     bool is_ready() noexcept {
         // when coro_ empty task is just already moved. return true.
-        return ctb_ ? ctb_->done() : true;
+        return coro_ ? coro_.done() : true;
     }
 
     // can ref value at any time
-    result_type& cur_value_ref() noexcept {
+    value_type& cur_value_ref() noexcept {
         auto prom = get_promise();
         if (prom) {
             return prom->result_;
         } else {
             // as task are moved.
-            static result_type empty{};
+            static value_type empty{};
             return empty;
         }
     }
@@ -330,7 +321,7 @@ class task {
   public:
     template<typename F,
         typename FF = typename detail::FunctionReferenceToPointer<F>::type,
-        typename C = typename detail::CallArgsWith<FF, result_type>>
+        typename C = typename detail::CallArgsWith<FF, value_type>>
     auto then(F&& func) {
         using Arguments = typename C::CallableInfo;
         return then_impl<FF, C>(std::forward<FF>(func), Arguments());
@@ -353,12 +344,11 @@ class task {
     template<typename>
     friend class promise_handle;
     std::shared_ptr<shared_state> ctb_;
+	ex::coroutine_handle<promise_type> coro_ = nullptr;
 
     promise_type* get_promise() {
-        if (ctb_)
-            return &(static_cast<ex::coroutine_handle<
-                         promise_type>*>(static_cast<ex::coroutine_handle<>*>(ctb_.get()))
-                         ->promise());
+        if (coro_)
+            return &(coro_.promise());
         else
             return nullptr;
     }
