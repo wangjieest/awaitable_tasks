@@ -22,7 +22,6 @@ int main() {
         std::cout << ++g_data << " in func2 " << std::endl;
         return g_data;
     };
-
     {
         auto old_task = awaitable_tasks::make_task(func);
         auto old_task_handle = old_task.get_promise_handle();
@@ -30,11 +29,9 @@ int main() {
         { auto new_task = old_task.then(func); }
         old_task_handle.resume(); // callback and destroy coro
     }
-
     {
         auto old_task = awaitable_tasks::make_task(func);
         auto old_task_handle = old_task.get_promise_handle();
-//         old_task_handle.cancel_self_release();
         { auto new_task = old_task.then(func); }
         old_task_handle.resume(); // do nothing
     }

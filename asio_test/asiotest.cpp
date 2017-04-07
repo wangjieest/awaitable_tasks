@@ -340,6 +340,7 @@ int main(int argc, char* argv[]) {
     {
       asio::io_service io_service;
       auto t = make_http(io_service, path, server);
+	  t.reset();
       io_service.run();
     }
 

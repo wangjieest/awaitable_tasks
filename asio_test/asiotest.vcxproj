@@ -89,7 +89,7 @@
       <Optimization>Disabled</Optimization>
       <PreprocessorDefinitions>ASIO_HAS_CONSTEXPR;ASIO_HAS_SECURE_RTL;ASIO_MSVC;ASIO_HEADER_ONLY;ASIO_STANDALONE;WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <SDLCheck>true</SDLCheck>
-      <AdditionalIncludeDirectories>./asio/asio/include;../include;</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>./asio/asio/include;../include;../include/mapbox/include;</AdditionalIncludeDirectories>
       <AdditionalOptions>/await %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
@@ -104,7 +104,7 @@
       <Optimization>Disabled</Optimization>
       <PreprocessorDefinitions>ASIO_HAS_CONSTEXPR;ASIO_HAS_SECURE_RTL;ASIO_MSVC;ASIO_HEADER_ONLY;ASIO_STANDALONE;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <SDLCheck>true</SDLCheck>
-      <AdditionalIncludeDirectories>./asio/asio/include;../include;</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>./asio/asio/include;../include;../include/mapbox/include;</AdditionalIncludeDirectories>
       <AdditionalOptions>/await %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
@@ -121,7 +121,7 @@
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <PreprocessorDefinitions>ASIO_HAS_CONSTEXPR;ASIO_HAS_SECURE_RTL;ASIO_MSVC;ASIO_HEADER_ONLY;ASIO_STANDALONE;WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <SDLCheck>true</SDLCheck>
-      <AdditionalIncludeDirectories>./asio/asio/include;../include;</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>./asio/asio/include;../include;../include/mapbox/include;</AdditionalIncludeDirectories>
       <AdditionalOptions>/await %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
@@ -140,7 +140,7 @@
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <PreprocessorDefinitions>ASIO_HAS_CONSTEXPR;ASIO_HAS_SECURE_RTL;ASIO_MSVC;ASIO_HEADER_ONLY;ASIO_STANDALONE;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <SDLCheck>true</SDLCheck>
-      <AdditionalIncludeDirectories>./asio/asio/include;../include;</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>./asio/asio/include;../include;../include/mapbox/include;</AdditionalIncludeDirectories>
       <AdditionalOptions>/await %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
@@ -154,6 +154,11 @@
     <Text Include="ReadMe.txt" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\include\mapbox\include\mapbox\optional.hpp" />
+    <ClInclude Include="..\include\mapbox\include\mapbox\recursive_wrapper.hpp" />
+    <ClInclude Include="..\include\mapbox\include\mapbox\variant.hpp" />
+    <ClInclude Include="..\include\mapbox\include\mapbox\variant_io.hpp" />
+    <ClInclude Include="..\include\mapbox\include\mapbox\variant_visitor.hpp" />
     <ClInclude Include="asio\asio\include\asio.hpp" />
     <ClInclude Include="coroutine_tasks.hpp" />
     <ClInclude Include="use_task.hpp" />
