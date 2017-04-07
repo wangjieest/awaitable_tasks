@@ -1,0 +1,4 @@
+[submodule "asio_test/asio"]
+	path = asio_test/asio
+	url = https://github.com/chriskohlhoff/asio.git
+	branch = asio-1-10-6
