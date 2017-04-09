@@ -24,12 +24,6 @@
     <ClInclude Include="coroutine_tasks.hpp">
       <Filter>Resource Files</Filter>
     </ClInclude>
-    <ClInclude Include="use_task.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="use_task_impl.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="asio\asio\include\asio.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -47,6 +41,9 @@
     </ClInclude>
     <ClInclude Include="..\include\mapbox\include\mapbox\variant_visitor.hpp">
       <Filter>variant</Filter>
+    </ClInclude>
+    <ClInclude Include="asio_use_task.hpp">
+      <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

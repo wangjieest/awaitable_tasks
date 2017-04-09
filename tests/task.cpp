@@ -22,13 +22,15 @@ int main() {
         std::cout << ++g_data << " in func2 " << std::endl;
         return g_data;
     };
+
     {
         auto old_task = awaitable_tasks::make_task(func);
         auto old_task_handle = old_task.get_promise_handle();
         old_task_handle.cancel_self_release();
         { auto new_task = old_task.then(func); }
-        old_task_handle.resume();  // callback and destroy coro
+        old_task_handle.resume(); // callback and destroy coro
     }
+
     {
         auto old_task = awaitable_tasks::make_task(func);
         auto old_task_handle = old_task.get_promise_handle();
@@ -42,7 +44,7 @@ int main() {
         auto old_task_handle = old_task.get_promise_handle();
         auto new_task = old_task.then(func);
         old_task_handle.resume();
-        auto v = new_task.cur_value_ref();
+        auto v = new_task.value_ref();
     }
     // make_task then and then
     {
@@ -50,7 +52,7 @@ int main() {
         auto old_task_handle = old_task.get_promise_handle();
         auto new_task = old_task.then(fund);
         old_task_handle.resume();
-        auto v = new_task.cur_value_ref();
+        auto v = new_task.value_ref();
     }
     // then task_gen
     {
@@ -83,40 +85,38 @@ int main() {
                             });
         old_task_handle.resume();
         old_task2_handle.resume();
-        auto v = new_task.cur_value_ref();
+        auto v = new_task.value_ref();
     }
-//     // then task_gen
-//     {
-//         auto old_task = awaitable_tasks::make_task(func);
-//         auto old_task_handle = old_task.get_promise_handle();
-//         auto new_task = awaitable_tasks::make_task(func);
-//         old_task.then(new_task)
-//             .then([](int& v) -> short {
-//                 std::cout << "get1 " << v << std::endl;
-//                 return 33;
-//             })
-//             .then([](short& v) -> awaitable_tasks::task<int> {
-//                 std::cout << "get2 " << v << std::endl;
-//                 co_await awaitable_tasks::ex::suspend_always{};
-//                 std::cout << "get3 " << v << std::endl;
-//                 return 55;
-//             });
-//         old_task_handle.resume();
-//         new_task.get_promise_handle().resume();
-//         auto v = new_task.cur_value_ref();
-//     }
+    // then task_gen
+    {
+        auto old_task = awaitable_tasks::make_task(func);
+        auto old_task_handle = old_task.get_promise_handle();
+        auto new_task = old_task.then(func2)
+                            .then([](int& v) -> short {
+                                std::cout << "get1 " << v << std::endl;
+                                return 33;
+                            })
+                            .then([](short& v) -> awaitable_tasks::task<int> {
+                                std::cout << "get2 " << v << std::endl;
+                                co_await awaitable_tasks::ex::suspend_always{};
+                                std::cout << "get3 " << v << std::endl;
+                                return 55;
+                            });
+        old_task_handle.resume();
+        new_task.get_promise_handle().resume();
+        auto v = new_task.value_ref();
+    }
     // when_all zip
     {
         auto task_a = awaitable_tasks::make_task(func);
         auto task_b = awaitable_tasks::make_task(func);
         auto task_a_handle = task_a.get_promise_handle();
         auto task_b_handle = task_b.get_promise_handle();
-        auto new_task = awaitable_tasks::when_all(task_a, task_b).then([](std::tuple<int, int>&) {
-            std::cout << "ok " << std::endl;
-        });
+        auto new_task = awaitable_tasks::when_all(task_a, task_b)
+                            .then([](std::tuple<int, int>&) { std::cout << "ok " << std::endl; });
         task_a_handle.resume();
         task_b_handle.resume();
-        auto v = new_task.cur_value_ref();
+        auto v = new_task.value_ref();
     }
     // when_all map
     {
@@ -125,13 +125,11 @@ int main() {
         tasks.emplace_back(awaitable_tasks::make_task(func));
         auto task_handle_a = tasks[0].get_promise_handle();
         auto task_handle_b = tasks[1].get_promise_handle();
-        auto new_task =
-            awaitable_tasks::when_all(tasks.begin(), tasks.end()).then([](std::vector<int>&) {
-                std::cout << "ok " << std::endl;
-            });
+        auto new_task = awaitable_tasks::when_all(tasks.begin(), tasks.end())
+                            .then([](std::vector<int>&) { std::cout << "ok " << std::endl; });
         task_handle_a.resume();
         task_handle_b.resume();
-        auto v = new_task.cur_value_ref();
+        auto v = new_task.value_ref();
     }
     // when_n all
     {
@@ -142,14 +140,13 @@ int main() {
         auto task_handle_a = tasks[0].get_promise_handle();
         auto task_handle_b = tasks[1].get_promise_handle();
         auto task_handle_c = tasks[2].get_promise_handle();
-        auto new_task = awaitable_tasks::when_n(tasks.begin(), tasks.end(), tasks.size())
-                            .then([](std::vector<std::pair<size_t, int>>&) {
-                                std::cout << "ok " << std::endl;
-                            });
+        auto new_task =
+            awaitable_tasks::when_n(tasks.begin(), tasks.end(), tasks.size())
+                .then([](std::vector<std::pair<size_t, int>>&) { std::cout << "ok " << std::endl; });
         task_handle_a.resume();
         task_handle_b.resume();
         task_handle_c.resume();
-        auto v = new_task.cur_value_ref();
+        auto v = new_task.value_ref();
     }
     // when_n some
     {
@@ -167,7 +164,7 @@ int main() {
                                 });
             task_handle_a.resume();
             task_handle_b.resume();
-            auto v = new_task.cur_value_ref();
+            auto v = new_task.value_ref();
         }
         task_handle_c.resume();
     }
@@ -187,9 +184,9 @@ int main() {
                                 })
                                 .then([]() { printf("ok"); });
             task_handle_a.resume();
-            auto v = new_task.cur_value_ref();
-            task_handle_b.resume();
-        }
+            auto v = new_task.value_ref();
+			task_handle_b.resume();
+		}
         task_handle_c.resume();
     }
     // when_any
@@ -206,9 +203,9 @@ int main() {
                 awaitable_tasks::when_any(tasks.begin(), tasks.end())
                     .then([](std::pair<size_t, int>& xx) { std::cout << "ok " << std::endl; });
             task_handle_a.resume();
-            auto v = new_task.cur_value_ref();
-            task_handle_b.resume();
-        }
+            auto v = new_task.value_ref();
+			task_handle_b.resume();
+		}
         task_handle_c.resume();
     }
     // when_any
@@ -229,9 +226,9 @@ int main() {
                                     return xx;
                                 });
             task_handle_a.resume();
-            auto v = new_task.cur_value_ref();
-            task_handle_b.resume();
-        }
+            auto v = new_task.value_ref();
+			task_handle_b.resume();
+		}
         task_handle_c.resume();
     }
     return 0;
