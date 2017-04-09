@@ -114,7 +114,7 @@ struct shared_state : public ex::coroutine_handle<> {
 
     bool valid() { return address() != nullptr; }
     void destroy_self() {
-        if (!is_self_release() && valid())
+        if (valid())
             destroy();
         *static_cast<ex::coroutine_handle<>*>(this) = nullptr;
     }
@@ -125,7 +125,8 @@ struct shared_state : public ex::coroutine_handle<> {
         if (target) {
             if (target->next_)
                 rescue_destroy(target->next_.get());
-            target->destroy_self();
+            if (!target->is_self_release())
+                target->destroy_self();
         }
     }
 
@@ -274,7 +275,22 @@ class promise_data {
     }
 
     auto& get_result() { return result_; }
+#define AWAIT_TASKS_TRACE_PROMISE
+#ifdef AWAIT_TASKS_TRACE_PROMISE
+    using alloc_of_char_type = std::allocator<char>;
+    void* operator new(size_t size) {
+        alloc_of_char_type al;
+        auto ptr = al.allocate(size);
+        AWAITABLE_TASKS_TRACE("promise created %p", ptr);
+        return ptr;
+    }
 
+    void operator delete(void* ptr, size_t size) noexcept {
+        alloc_of_char_type al;
+        AWAITABLE_TASKS_TRACE("promise destroy %p", ptr);
+        return al.deallocate(static_cast<char*>(ptr), size);
+    }
+#endif
 #ifdef AWAITABLE_TASKS_VARIANT
     template<typename V>
     auto& get_result() {

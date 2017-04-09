@@ -163,12 +163,13 @@ awaitable_tasks::task<asio::error_code> make_http(asio::io_service& io_service,
 
         tcp::resolver::query query(server, "http");
 
+        tcp::socket socket_(io_service);
         tcp::resolver resolver_(io_service);
+
         auto resolver_ret = co_await resolver_.async_resolve(query, asio::use_task);
 
         // Attempt a connection to each endpoint in the list until we
         // successfully establish a connection.
-        tcp::socket socket_(io_service);
         co_await asio::async_connect(socket_, resolver_ret, asio::use_task);
 
         co_await asio::async_write(socket_, request_, asio::use_task);
@@ -245,6 +246,8 @@ awaitable_tasks::task<asio::error_code> make_http(asio::io_service& io_service,
     request_stream << "Connection: close\r\n\r\n";
     tcp::resolver::query query(server, "http");
     tcp::resolver resolver_(io_service);
+    tcp::socket socket_(io_service);
+
     auto resolver_ret = co_await resolver_.async_resolve(query, asio::use_task);
 
     err = std::get<0>(resolver_ret);
@@ -254,7 +257,6 @@ awaitable_tasks::task<asio::error_code> make_http(asio::io_service& io_service,
 
     // Attempt a connection to each endpoint in the list until we
     // successfully establish a connection.
-    tcp::socket socket_(io_service);
     auto&& connect_ret = co_await asio::async_connect(socket_, iter, asio::use_task);
     err = std::get<0>(connect_ret);
     if (err)
@@ -292,6 +294,9 @@ awaitable_tasks::task<asio::error_code> make_http(asio::io_service& io_service,
     // Read the response headers, which are terminated by a blank line.
     auto&& read_ret2 =
         co_await asio::async_read_until(socket_, response_, "\r\n\r\n", asio::use_task);
+    err = std::get<0>(read_ret2);
+    if (err)
+        return err;
 
     // Process the response headers.
     std::istream response_stream2(&response_);
@@ -338,6 +343,8 @@ awaitable_tasks::task<asio::error_code> make_http(asio::io_service& io_service,
     request_stream << "Connection: close\r\n\r\n";
     tcp::resolver::query query(server, "http");
     tcp::resolver resolver_(io_service);
+    tcp::socket socket_(io_service);
+
     auto resolver_ret = co_await resolver_.async_resolve(query, asio::use_task);
 
     if (resolver_ret.which() == resolver_ret.which<asio::error_code>())
@@ -347,7 +354,6 @@ awaitable_tasks::task<asio::error_code> make_http(asio::io_service& io_service,
 
     // Attempt a connection to each endpoint in the list until we
     // successfully establish a connection.
-    tcp::socket socket_(io_service);
     auto&& connect_ret = co_await asio::async_connect(socket_, iter, asio::use_task);
     if (connect_ret.which() == connect_ret.which<asio::error_code>())
         return connect_ret.get<asio::error_code>();
