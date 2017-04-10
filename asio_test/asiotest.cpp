@@ -146,8 +146,81 @@ class client {
     asio::streambuf response_;
 };
 
+int sync_request(asio::io_service& io_service, const std::string& server, const std::string& path) {
+    try {
+        // Get a list of endpoints corresponding to the server name.
+        tcp::resolver resolver(io_service);
+        tcp::resolver::query query(server, "http");
+        auto endpoints = resolver.resolve(query);
+
+        // Try each endpoint until we successfully establish a connection.
+        tcp::socket socket(io_service);
+        asio::connect(socket, endpoints);
+
+        // Form the request. We specify the "Connection: close" header so that the
+        // server will close the socket after transmitting the response. This will
+        // allow us to treat all data up until the EOF as the content.
+        asio::streambuf request;
+        std::ostream request_stream(&request);
+        request_stream << "GET " << path << " HTTP/1.0\r\n";
+        request_stream << "Host: " << server << "\r\n";
+        request_stream << "Accept: */*\r\n";
+        request_stream << "Connection: close\r\n\r\n";
+
+        // Send the request.
+        asio::write(socket, request);
+
+        // Read the response status line. The response streambuf will automatically
+        // grow to accommodate the entire line. The growth may be limited by passing
+        // a maximum size to the streambuf constructor.
+        asio::streambuf response;
+        asio::read_until(socket, response, "\r\n");
+
+        // Check that response is OK.
+        std::istream response_stream(&response);
+        std::string http_version;
+        response_stream >> http_version;
+        unsigned int status_code;
+        response_stream >> status_code;
+        std::string status_message;
+        std::getline(response_stream, status_message);
+        if (!response_stream || http_version.substr(0, 5) != "HTTP/") {
+            std::cout << "Invalid response\n";
+            return 1;
+        }
+        if (status_code != 200) {
+            std::cout << "Response returned with status code " << status_code << "\n";
+            return 1;
+        }
+
+        // Read the response headers, which are terminated by a blank line.
+        asio::read_until(socket, response, "\r\n\r\n");
+
+        // Process the response headers.
+        std::string header;
+        while (std::getline(response_stream, header) && header != "\r")
+            std::cout << header << "\n";
+        std::cout << "\n";
+
+        // Write whatever content we already have to output.
+        if (response.size() > 0)
+            std::cout << &response;
+
+        // Read until EOF, writing data to output as we go.
+        asio::error_code error;
+        while (asio::read(socket, response, asio::transfer_at_least(1), error))
+            std::cout << &response;
+        if (error != asio::error::eof)
+            throw asio::system_error(error);
+    } catch (std::exception& e) {
+        std::cout << "Exception: " << e.what() << "\n";
+    }
+
+    return 0;
+}
+
 #if ASIO_TASK_IMPL == ASIO_TASK_EXCEPTION
-awaitable_tasks::task<asio::error_code> make_http(asio::io_service& io_service,
+awaitable_tasks::task<asio::error_code> make_request_task(asio::io_service& io_service,
                                             const std::string& server,
                                             const std::string& path) {
     asio::error_code err;
@@ -210,29 +283,31 @@ awaitable_tasks::task<asio::error_code> make_http(asio::io_service& io_service,
             std::cout << &response_;
 
         // Continue reading remaining data until EOF.
-        for (;;) {
-            auto count = co_await asio::async_read(socket_,
-                                            response_,
-                                            asio::transfer_at_least(1),
-                                            asio::use_task);
-            if (count) {
-                std::cout << &response_;
-                continue;
-            } else {
-                break;
+        // Read until EOF, writing data to output as we go.
+        try {
+            for (;;) {
+                auto count = co_await asio::async_read(socket_,
+                                                response_,
+                                                asio::transfer_at_least(1),
+                                                asio::use_task);
+                if (count)
+                    std::cout << &response_;
             }
+        } catch (std::system_error& e) {
+            if (e.code() == asio::error::eof) {
+                return asio::error_code();
+            }
+            throw asio::system_error(e.code());
         }
-    } catch (std::system_error& e) {
-        if (e.code() != asio::error::eof) {
-            std::cout << "Exception: " << e.what() << "\n";
-            return asio::error_code(e.code());
-        }
+    } catch (std::exception& e) {
+        std::cout << "Exception: " << e.what() << "\n";
     }
+
     return asio::error_code();
 }
 
 #elif ASIO_TASK_IMPL == ASIO_TASK_TUPLE
-awaitable_tasks::task<asio::error_code> make_http(asio::io_service& io_service,
+awaitable_tasks::task<asio::error_code> make_request_task(asio::io_service& io_service,
                                             const std::string& server,
                                             const std::string& path) {
     asio::error_code err;
@@ -328,7 +403,7 @@ awaitable_tasks::task<asio::error_code> make_http(asio::io_service& io_service,
     return err;
 }
 #elif ASIO_TASK_IMPL == ASIO_TASK_MAPBOX_VARIANT
-awaitable_tasks::task<asio::error_code> make_http(asio::io_service& io_service,
+awaitable_tasks::task<asio::error_code> make_request_task(asio::io_service& io_service,
                                             const std::string& server,
                                             const std::string& path) {
     asio::error_code err;
@@ -435,21 +510,20 @@ int main(int argc, char* argv[]) {
             //             std::cout << "  async_client www.boost.org /LICENSE_1_0.txt\n";
         }
         {
-            // 			asio::io_service io_service;
-            //
-            // 			client c(io_service, server, path);
-            // 			io_service.run();
-        }
-
-        {
-            //             awaitable_tasks::promise_handle<int> handle_;
-            //             auto t = handle_.get_task();
-            //             auto t2 = t.then([](int a) { std::cout << a << std::endl; });
-            //             handle_.set_value(1);
-
-        } {
+            std::cout << "sync_request\n";
             asio::io_service io_service;
-            auto t = make_http(io_service, server, path);
+            sync_request(io_service, server, path);
+        }
+        {
+            std::cout << "async_request\n";
+            asio::io_service io_service;
+            client c(io_service, server, path);
+            io_service.run();
+        }
+        {
+            std::cout << "coroutine_request\n";
+            asio::io_service io_service;
+            auto t = make_request_task(io_service, server, path);
             io_service.run();
         }
     } catch (std::exception& e) {

@@ -275,7 +275,7 @@ class promise_data {
     }
 
     auto& get_result() { return result_; }
-#define AWAIT_TASKS_TRACE_PROMISE
+//#define AWAIT_TASKS_TRACE_PROMISE
 #ifdef AWAIT_TASKS_TRACE_PROMISE
     using alloc_of_char_type = std::allocator<char>;
     void* operator new(size_t size) {
