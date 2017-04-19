@@ -27,23 +27,23 @@
     <ClInclude Include="asio\asio\include\asio.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\include\mapbox\include\mapbox\optional.hpp">
-      <Filter>variant</Filter>
-    </ClInclude>
-    <ClInclude Include="..\include\mapbox\include\mapbox\recursive_wrapper.hpp">
-      <Filter>variant</Filter>
-    </ClInclude>
-    <ClInclude Include="..\include\mapbox\include\mapbox\variant.hpp">
-      <Filter>variant</Filter>
-    </ClInclude>
-    <ClInclude Include="..\include\mapbox\include\mapbox\variant_io.hpp">
-      <Filter>variant</Filter>
-    </ClInclude>
-    <ClInclude Include="..\include\mapbox\include\mapbox\variant_visitor.hpp">
-      <Filter>variant</Filter>
-    </ClInclude>
     <ClInclude Include="asio_use_task.hpp">
       <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\mapbox\optional.hpp">
+      <Filter>variant</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\mapbox\recursive_wrapper.hpp">
+      <Filter>variant</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\mapbox\variant.hpp">
+      <Filter>variant</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\mapbox\variant_io.hpp">
+      <Filter>variant</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\mapbox\variant_visitor.hpp">
+      <Filter>variant</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
