@@ -21,9 +21,6 @@
     <Text Include="ReadMe.txt" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="coroutine_tasks.hpp">
-      <Filter>Resource Files</Filter>
-    </ClInclude>
     <ClInclude Include="asio\asio\include\asio.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>

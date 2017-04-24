@@ -20,8 +20,6 @@ namespace awaitable_tasks {
 namespace ex = std::experimental;
 template<typename>
 class task;
-template<typename>
-class promise_data;
 
 namespace detail {
 template<typename T>
@@ -109,7 +107,7 @@ struct shared_state : public ex::coroutine_handle<> {
     template<typename>
     friend class task;
     template<typename>
-    friend class promise_data;
+    friend class promise;
     ~shared_state() = default;
 
     bool valid() { return address() != nullptr; }
@@ -118,13 +116,13 @@ struct shared_state : public ex::coroutine_handle<> {
             destroy();
         *static_cast<ex::coroutine_handle<>*>(this) = nullptr;
     }
-    void destroy_chain() { rescue_destroy(this); }
+    void destroy_chain() { recursive_destroy(this); }
 
   protected:
-    static void rescue_destroy(shared_state* target) {
+    static void recursive_destroy(shared_state* target) {
         if (target) {
             if (target->next_)
-                rescue_destroy(target->next_.get());
+                recursive_destroy(target->next_.get());
             if (!target->is_self_release())
                 target->destroy_self();
         }
@@ -186,6 +184,7 @@ class promise_handle<void> {
 
   protected:
     std::shared_ptr<shared_state> ctb_;
+    std::shared_ptr<void> result_;
 };
 
 template<typename T>
@@ -204,112 +203,116 @@ class promise_handle : public promise_handle<> {
 
     template<typename U>
     void set_value(U&& value) {
-        auto coro = static_cast<ex::coroutine_handle<
-            promise_data<T>>*>(static_cast<ex::coroutine_handle<>*>(ctb_.get()));
-        coro->promise().set_value(std::move(value));
+        *((T*)(result_).get()) = std::forward<U>(value);
+        resume();
     }
     void set_exception(std::exception_ptr eptr) {
         auto coro = static_cast<ex::coroutine_handle<
-            promise_data<T>>*>(static_cast<ex::coroutine_handle<>*>(ctb_.get()));
+            task<T>::promise_type>*>(static_cast<ex::coroutine_handle<>*>(ctb_.get()));
         coro->promise().set_eptr(std::move(eptr));
+        resume();
     }
 
-    static promise_handle from_task(const task<T>& t) noexcept {
-        promise_handle ret;
-        ret.ctb_ = t.ctb_;
-        return ret;
+    auto get_task() {
+        auto result = std::make_shared<T>();
+        result_ = result;
+        auto t = [](std::shared_ptr<T> value) -> task<T> {
+            co_await ex::suspend_always{};
+            return *(value.get());
+        }(std::move(result));
+        ctb_ = t.ctb_;
+        return std::move(t);
     }
-};
-
-template<typename T>
-class promise_data {
-  public:
-    using result_type = T;
-    promise_data& get_return_object() noexcept { return *this; }
-    auto initial_suspend() noexcept { return ex::suspend_never{}; }
-    auto final_suspend() noexcept {
-        struct final_awaiter {
-            promise_data* me;
-            bool await_ready() noexcept { return false; }
-            void await_suspend(ex::coroutine_handle<>) noexcept {
-                // if suspend by caller , then resume to it.
-                if (me->resume_)
-                    me->resume_();
-            }
-            void await_resume() noexcept {}
-        };
-        return final_awaiter{this};
-    }
-    void set_caller(ex::coroutine_handle<> caller_coro) noexcept { resume_ = caller_coro; }
-
-    template<typename U>
-    void return_value(U&& value) {
-        result_ = std::forward<U>(value);
-    }
-#ifdef AWAITABLE_TASKS_VARIANT
-    void set_eptr(std::exception_ptr eptr) noexcept { result_ = std::move(eptr); }
-    template<typename U>
-    void set_value(U&& value) {
-        result_ = std::move(value);
-    }
-#else
-    void set_eptr(std::exception_ptr eptr) noexcept { eptr_ = std::move(eptr); }
-    template<typename U>
-    void set_value(U&& value) {
-        result_ = std::move(value);
-    }
-#endif
-#ifdef AWAITABLE_TASKS_CAPTURE_EXCEPTION
-    void set_exception(std::exception_ptr eptr) noexcept { set_eptr(std::move(eptr)); }
-#endif
-    void throw_if_exception() const {
-#ifdef AWAITABLE_TASKS_VARIANT
-        if (result_.which() == result_.which<std::exception_ptr>())
-            std::rethrow_exception(result_.get<std::exception_ptr>());
-        else if (result_.which() != result_.which<result_type>())
-            throw std::runtime_error("value not returned");
-#else
-        if (eptr_)
-            std::rethrow_exception(eptr_);
-#endif
-    }
-
-    auto& get_result() { return result_; }
-//#define AWAIT_TASKS_TRACE_PROMISE
-#ifdef AWAIT_TASKS_TRACE_PROMISE
-    using alloc_of_char_type = std::allocator<char>;
-    void* operator new(size_t size) {
-        alloc_of_char_type al;
-        auto ptr = al.allocate(size);
-        AWAITABLE_TASKS_TRACE("promise created %p", ptr);
-        return ptr;
-    }
-
-    void operator delete(void* ptr, size_t size) noexcept {
-        alloc_of_char_type al;
-        AWAITABLE_TASKS_TRACE("promise destroy %p", ptr);
-        return al.deallocate(static_cast<char*>(ptr), size);
-    }
-#endif
-#ifdef AWAITABLE_TASKS_VARIANT
-    template<typename V>
-    auto& get_result() {
-        return result_.get<V>();
-    }
-
-    struct monostate {};
-    mapbox::util::variant<monostate, result_type, std::exception_ptr> result_;
-#else
-    std::exception_ptr eptr_ = nullptr;
-    result_type result_{};
-#endif
-    ex::coroutine_handle<> resume_;
 };
 
 template<typename T>
 class task {
   public:
-    using promise_type = promise_data<T>;
+    class promise_type {
+      public:
+        using result_type = T;
+        promise_type& get_return_object() noexcept { return *this; }
+        auto initial_suspend() noexcept { return ex::suspend_never{}; }
+        auto final_suspend() noexcept {
+            struct final_awaiter {
+                promise_type* me;
+                bool await_ready() noexcept { return false; }
+                void await_suspend(ex::coroutine_handle<>) noexcept {
+                    // if suspend by caller , then resume to it.
+                    if (me->caller_)
+                        me->caller_();
+                }
+                void await_resume() noexcept {}
+            };
+            return final_awaiter{this};
+        }
+
+        template<typename U>
+        void return_value(U&& value) {
+            result_ = std::forward<U>(value);
+        }
+
+#ifdef AWAITABLE_TASKS_CAPTURE_EXCEPTION
+        void set_exception(std::exception_ptr eptr) noexcept { set_eptr(std::move(eptr)); }
+#endif
+
+#ifdef AWAITABLE_TASKS_VARIANT
+        void set_eptr(std::exception_ptr eptr) noexcept { result_ = std::move(eptr); }
+        template<typename U>
+        void set_value(U&& value) {
+            result_ = std::move(value);
+        }
+#else
+        void set_eptr(std::exception_ptr eptr) noexcept { eptr_ = std::move(eptr); }
+        template<typename U>
+        void set_value(U&& value) {
+            result_ = std::move(value);
+        }
+#endif
+        void set_caller(ex::coroutine_handle<> caller_coro) noexcept { caller_ = caller_coro; }
+        void throw_if_exception() const {
+#ifdef AWAITABLE_TASKS_VARIANT
+            if (result_.which() == result_.which<std::exception_ptr>())
+                std::rethrow_exception(result_.get<std::exception_ptr>());
+            else if (result_.which() != result_.which<result_type>())
+                throw std::runtime_error("value not returned");
+#else
+            if (eptr_)
+                std::rethrow_exception(eptr_);
+#endif
+        }
+
+        auto& get_result() { return result_; }
+//#define AWAIT_TASKS_TRACE_PROMISE
+#ifdef AWAIT_TASKS_TRACE_PROMISE
+        using alloc_of_char_type = std::allocator<char>;
+        void* operator new(size_t size) {
+            alloc_of_char_type al;
+            auto ptr = al.allocate(size);
+            AWAITABLE_TASKS_TRACE("promise created %p", ptr);
+            return ptr;
+        }
+
+        void operator delete(void* ptr, size_t size) noexcept {
+            alloc_of_char_type al;
+            AWAITABLE_TASKS_TRACE("promise destroy %p", ptr);
+            return al.deallocate(static_cast<char*>(ptr), size);
+        }
+#endif
+#ifdef AWAITABLE_TASKS_VARIANT
+        template<typename V>
+        auto& get_result() {
+            return result_.get<V>();
+        }
+
+        struct monostate {};
+        mapbox::util::variant<monostate, result_type, std::exception_ptr> result_;
+#else
+        std::exception_ptr eptr_ = nullptr;
+        result_type result_{};
+#endif
+        ex::coroutine_handle<> caller_;
+    };
     bool await_ready() noexcept { return is_done_or_empty(); }
 
     T await_resume() {
@@ -359,11 +362,7 @@ class task {
     }
 
   public:
-    promise_handle<T> get_promise_handle() noexcept { return promise_handle<T>::from_task(*this); }
-    bool is_done_or_empty() noexcept {
-        // when coro_ empty task is just already moved. return true.
-        return coro_ ? coro_.done() : true;
-    }
+    bool is_done_or_empty() noexcept { return coro_ ? coro_.done() : true; }
     const T* value_ref() {
         if (coro_) {
 #ifdef AWAITABLE_TASKS_VARIANT
@@ -385,6 +384,7 @@ class task {
     friend class task;
     template<typename>
     friend class promise_handle;
+
     std::shared_ptr<shared_state> ctb_;
     ex::coroutine_handle<promise_type> coro_ = nullptr;
 
@@ -532,17 +532,6 @@ class task {
     }
 #pragma endregion
 };
-
-template<bool Suspend = true,
-    typename F,
-    typename FF = typename detail::FunctionReferenceToPointer<F>::type,
-    typename R = typename detail::CallArgsWith<FF>::TaskReturn>
-R make_task(F&& func) noexcept {
-    return [](FF f) -> R {
-        co_await ex::suspend_if{Suspend};
-        return f();
-    }(std::forward<FF>(func));
-}
 }
 
 #pragma region task helpers
@@ -563,7 +552,7 @@ struct when_all_range_context {
     using task_holder_type = task<holder_type>;
     using task_holder_container_type = std::vector<task_holder_type>;
 
-    promise_handle<> handle;
+    promise_handle<holder_type> handle;
     data_type results;
     size_t task_count = 0;
 };
@@ -599,17 +588,9 @@ typename Ctx::retrun_type when_all(InputIterator first, InputIterator last) {
             return detail::Unkown{};
         }));
     }
-
-    auto ret = [](bool suspend,
-                    std::shared_ptr<Ctx> c,
-                    typename Ctx::task_holder_container_type ts) -> typename Ctx::retrun_type {
-        // if no task resume at once
-        co_await ex::suspend_if{suspend};
-        return std::move(c->results);
-    }
-    (all_task_count != 0, ctx, std::move(task_datas));
-    ctx->handle = ret.get_promise_handle();
-    return ret;
+    return ctx->handle.get_task().then([ ctx, holder = std::move(task_datas) ] {
+        return std::move(ctx->results);
+    });
 }
 }
 
@@ -629,7 +610,7 @@ struct when_n_range_context {
 
     inline void set_result(size_t idx, T& data) { results.emplace_back(idx, std::move(data)); }
 
-    promise_handle<> handle;
+    promise_handle<holder_type> handle;
     data_type results;
     size_t task_count = 0;
 };
@@ -646,36 +627,30 @@ typename Ctx::retrun_type when_n(InputIterator first, InputIterator last, size_t
     n = ((n && n < all_task_count) ? n : all_task_count);
     ctx->task_count = n;
     // save tasks in the vector
-    typename Ctx::task_holder_container_type tasks;
-    tasks.reserve(n);
+    using tasks_type = typename Ctx::task_holder_container_type;
+    tasks_type task_datas;
+    task_datas.reserve(n);
 
     for (size_t idx = 0; first != last; ++idx, ++first) {
-        tasks.emplace_back(
-                (*first).then([ctx, idx](typename detail::isTaskOrRet<T>::Inner& a) -> decltype(
-                                                                                        auto) {
-                    auto& data = *ctx;
+        task_datas.emplace_back(
+                    (*first).then([ctx, idx](typename detail::isTaskOrRet<T>::Inner& a) -> decltype(
+                                                                                            auto) {
+                        auto& data = *ctx;
 
-                    if (data.task_count != 0) {
-                        data.set_result(idx, a);
+                        if (data.task_count != 0) {
+                            data.set_result(idx, a);
 
-                        if (--data.task_count == 0) {
-                            data.handle.resume();
+                            if (--data.task_count == 0) {
+                                data.handle.resume();
+                            }
                         }
-                    }
-                    return detail::Unkown{};
-                }));
+                        return detail::Unkown{};
+                    }));
     }
 
-    auto ret = [](bool suspend,
-                    std::shared_ptr<Ctx> c,
-                    typename Ctx::task_holder_container_type ts) -> typename Ctx::retrun_type {
-        // if no task resume at once
-        co_await ex::suspend_if{suspend};
-        return c->results;
-    }
-    (n != 0, ctx, std::move(tasks));
-    ctx->handle = ret.get_promise_handle();
-    return ret;
+    return ctx->handle.get_task().then([ ctx, holder = std::move(task_datas) ] {
+        return std::move(ctx->results);
+    });
 }
 
 // when_any returns type of std::pair<size_t, T>
@@ -691,6 +666,7 @@ task<std::pair<size_t, T>> when_any(InputIterator first, InputIterator last) {
 
 // when_all variadic/zip
 #include <tuple>
+#include <array>
 namespace awaitable_tasks {
 namespace detail {
 template<typename... Ts>
@@ -718,7 +694,7 @@ struct when_variadic_context {
         }
     }
 
-    promise_handle<> handle;  // shared
+    promise_handle<detail::Unkown> handle;  // shared
     data_type results;
     size_t task_count = sizeof...(Ts);
 };
@@ -733,17 +709,15 @@ using UnkownSequence = task<detail::Unkown>;
 template<bool any, size_t... Is, typename... Ts, typename Ctx = when_variadic_context<Ts...>>
 typename Ctx::task_type when_variant_impl(std::index_sequence<Is...>, Ts&... ts) {
     auto ctx = std::make_shared<Ctx>();
-    auto ret = [](std::shared_ptr<Ctx> c, typename UnkownSequence<Is>... tasks) ->
-        typename Ctx::task_type {
-        co_await ex::suspend_always{};
-        return c->results;
-    }
-    (ctx, std::move(task_transform(ts, [ctx](typename detail::isTaskOrRet<Ts>::Inner a) -> Unkown {
-        ctx->set_variadic_result<any, Is>(a);
-        return Unkown{};
-    }))...);
-    ctx->handle = ret.get_promise_handle();
-    return ret;
+    std::array<task<Unkown>, sizeof...(Is)> task_datas{
+        task_transform(ts, [ctx](typename detail::isTaskOrRet<Ts>::Inner a) -> Unkown {
+            ctx->set_variadic_result<any, Is>(a);
+            return Unkown{};
+        })...};
+
+    return ctx->handle.get_task().then([ ctx, holder = std::move(task_datas) ] {
+        return std::move(ctx->results);
+    });
 }
 }
 

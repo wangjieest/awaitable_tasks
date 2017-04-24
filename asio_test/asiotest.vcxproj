@@ -161,7 +161,6 @@
     <ClInclude Include="..\include\mapbox\variant_visitor.hpp" />
     <ClInclude Include="asio\asio\include\asio.hpp" />
     <ClInclude Include="asio_use_task.hpp" />
-    <ClInclude Include="coroutine_tasks.hpp" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="asiotest.cpp" />
