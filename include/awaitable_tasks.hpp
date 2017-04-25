@@ -139,7 +139,6 @@ class promise_handle;
 template<>
 class promise_handle<void> {
   public:
-    promise_handle() = default;
     template<typename V>
     promise_handle(const promise_handle<V>& rhs) noexcept {
         ctb_ = rhs.ctb_;
@@ -170,7 +169,7 @@ class promise_handle<void> {
     void operator()() { resume(); }
 
     bool valid() noexcept { return ctb_ && ctb_->valid(); }
-
+    bool is_done() noexcept { return ctb_ && ctb_->done(); }
     void cancel_self_release() {
         if (ctb_)
             ctb_->set_self_release(false);
@@ -183,6 +182,7 @@ class promise_handle<void> {
     }
 
   protected:
+    promise_handle() = default;
     std::shared_ptr<shared_state> ctb_;
     std::shared_ptr<void> result_;
 };
@@ -190,7 +190,7 @@ class promise_handle<void> {
 template<typename T>
 class promise_handle : public promise_handle<> {
   public:
-    promise_handle() = default;
+    promise_handle() { result_ = std::make_shared<T>(); };
     ~promise_handle() = default;
     promise_handle(const promise_handle& rhs) noexcept { ctb_ = rhs.ctb_; }
     promise_handle& operator=(const promise_handle& rhs) noexcept { ctb_ = rhs.ctb_; }
@@ -203,10 +203,12 @@ class promise_handle : public promise_handle<> {
 
     template<typename U>
     void set_value(U&& value) {
+        _ASSERT(!is_done());
         *reinterpret_cast<T*>(result_.get()) = std::forward<U>(value);
         resume();
     }
     void set_exception(std::exception_ptr eptr) {
+        _ASSERT(!is_done());
         auto coro = static_cast<ex::coroutine_handle<
             task<T>::promise_type>*>(static_cast<ex::coroutine_handle<>*>(ctb_.get()));
         coro->promise().set_eptr(std::move(eptr));
@@ -214,8 +216,8 @@ class promise_handle : public promise_handle<> {
     }
 
     auto get_task() {
-        auto result = std::make_shared<T>();
-        result_ = result;
+        _ASSERT(!ctb_);
+        auto result = std::static_pointer_cast<T>(result_);
         auto t = [](std::shared_ptr<T> value) -> task<T> {
             co_await ex::suspend_always{};
             return *(value.get());
@@ -555,6 +557,7 @@ struct when_all_range_context {
     promise_handle<holder_type> handle;
     data_type results;
     size_t task_count = 0;
+    task_holder_container_type tasks_holder;
 };
 }
 
@@ -568,19 +571,13 @@ typename Ctx::retrun_type when_all(InputIterator first, InputIterator last) {
     const size_t all_task_count = std::distance(first, last);
     ctx->task_count = all_task_count;
     ctx->results.resize(all_task_count);
-    // save tasks in the vector
-    using tasks_type = typename Ctx::task_holder_container_type;
-    tasks_type task_datas;
-    task_datas.reserve(all_task_count);
-
+    ctx->tasks_holder.reserve(all_task_count);
+    using task_type = typename detail::isTaskOrRet<T>::Inner;
     for (size_t idx = 0; first != last; ++idx, ++first) {
-        task_datas.emplace_back((*first).then([ctx, idx](typename detail::isTaskOrRet<T>::Inner& a)
-                                                  -> detail::Unkown {
+        ctx->tasks_holder.emplace_back((*first).then([ctx, idx](task_type& a) -> detail::Unkown {
             auto& data = *ctx;
-
             if (data.task_count != 0) {
                 data.results[idx] = std::move(a);
-
                 if (--data.task_count == 0) {
                     data.handle.resume();
                 }
@@ -588,9 +585,7 @@ typename Ctx::retrun_type when_all(InputIterator first, InputIterator last) {
             return detail::Unkown{};
         }));
     }
-    return ctx->handle.get_task().then([ ctx, holder = std::move(task_datas) ] {
-        return std::move(ctx->results);
-    });
+    return ctx->handle.get_task().then([ctx] { return std::move(ctx->results); });
 }
 }
 
@@ -613,6 +608,7 @@ struct when_n_range_context {
     promise_handle<holder_type> handle;
     data_type results;
     size_t task_count = 0;
+    task_holder_container_type tasks_holder;
 };
 }
 
@@ -626,41 +622,30 @@ typename Ctx::retrun_type when_n(InputIterator first, InputIterator last, size_t
     const size_t all_task_count = std::distance(first, last);
     n = ((n && n < all_task_count) ? n : all_task_count);
     ctx->task_count = n;
-    // save tasks in the vector
-    using tasks_type = typename Ctx::task_holder_container_type;
-    tasks_type task_datas;
-    task_datas.reserve(n);
-
+    ctx->tasks_holder.reserve(n);
+    using task_type = typename detail::isTaskOrRet<T>::Inner;
     for (size_t idx = 0; first != last; ++idx, ++first) {
-        task_datas.emplace_back(
-                    (*first).then([ctx, idx](typename detail::isTaskOrRet<T>::Inner& a) -> decltype(
-                                                                                            auto) {
-                        auto& data = *ctx;
-
-                        if (data.task_count != 0) {
-                            data.set_result(idx, a);
-
-                            if (--data.task_count == 0) {
-                                data.handle.resume();
-                            }
-                        }
-                        return detail::Unkown{};
-                    }));
+        ctx->tasks_holder.emplace_back((*first).then([ctx, idx](task_type& a) -> decltype(auto) {
+            auto& data = *ctx;
+            if (data.task_count != 0) {
+                data.set_result(idx, a);
+                if (--data.task_count == 0) {
+                    data.handle.resume();
+                }
+            }
+            return detail::Unkown{};
+        }));
     }
-
-    return ctx->handle.get_task().then([ ctx, holder = std::move(task_datas) ] {
-        return std::move(ctx->results);
-    });
+    return ctx->handle.get_task().then([ctx] { return std::move(ctx->results); });
 }
 
 // when_any returns type of std::pair<size_t, T>
 template<typename InputIterator,
     typename T =
-        typename detail::isTaskOrRet<std::iterator_traits<InputIterator>::value_type>::Inner>
-task<std::pair<size_t, T>> when_any(InputIterator first, InputIterator last) {
-    return when_n(first, last, 1)
-        .then(
-            [](std::vector<std::pair<size_t, T>>& vec) -> std::pair<size_t, T> { return vec[0]; });
+        typename detail::isTaskOrRet<std::iterator_traits<InputIterator>::value_type>::Inner,
+    typename Pair = std::pair<size_t, T>>
+task<Pair> when_any(InputIterator first, InputIterator last) {
+    return when_n(first, last, 1).then([](std::vector<Pair>& vec) -> Pair { return vec[0]; });
 }
 }
 
@@ -693,43 +678,38 @@ struct when_variadic_context {
             }
         }
     }
-
-    promise_handle<detail::Unkown> handle;  // shared
+    promise_handle<detail::Unkown> handle;
     data_type results;
     size_t task_count = sizeof...(Ts);
+    std::array<task<Unkown>, sizeof...(Ts)> tasks_holder;
 };
 
 template<typename T, typename F>
 inline decltype(auto) task_transform(T& t, F&& f) {
     return t.then(std::move(f));
 }
-template<size_t I>
-using UnkownSequence = task<detail::Unkown>;
 
 template<bool any, size_t... Is, typename... Ts, typename Ctx = when_variadic_context<Ts...>>
 typename Ctx::task_type when_variant_impl(std::index_sequence<Is...>, Ts&... ts) {
     auto ctx = std::make_shared<Ctx>();
-    std::array<task<Unkown>, sizeof...(Is)> task_datas{
+    ctx->tasks_holder = {
         task_transform(ts, [ctx](typename detail::isTaskOrRet<Ts>::Inner a) -> Unkown {
             ctx->set_variadic_result<any, Is>(a);
             return Unkown{};
         })...};
-
-    return ctx->handle.get_task().then([ ctx, holder = std::move(task_datas) ] {
-        return std::move(ctx->results);
-    });
+    return ctx->handle.get_task().then([ctx] { return std::move(ctx->results); });
 }
 }
 
 template<typename T, typename... Ts>
-decltype(auto) when_all(T& t, Ts&... ts) {
+decltype(auto) when_all(task<T>& t, Ts&... ts) {
     return detail::when_variant_impl<false>(std::make_index_sequence<sizeof...(Ts) + 1>{},
                                             t,
                                             ts...);
 }
 #ifdef AWAITABLE_TASKS_VARIANT
 template<typename T, typename... Ts>
-decltype(auto) when_any(T& t, Ts&... ts) {
+decltype(auto) when_any(task<T>& t, Ts&... ts) {
     return detail::when_variant_impl<true>(std::make_index_sequence<sizeof...(Ts) + 1>{}, t, ts...);
 }
 #endif

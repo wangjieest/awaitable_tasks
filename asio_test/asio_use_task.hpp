@@ -54,7 +54,7 @@ namespace asio {
 * completes with an error_code indicating failure, it is converted into a
 * system_error and passed back to the caller via the task.
 */
-template<typename Allocator = std::allocator<void> >
+template<typename Allocator = std::allocator<void>>
 class use_task_t {
   public:
     /// The allocator type. The allocator is used when constructing the
@@ -106,45 +106,41 @@ class promise_handler {
 #elif ASIO_TASK_IMPL == ASIO_TASK_MAPBOX_VARIANT
     using result_type_t = mapbox::util::variant<asio::error_code, T>;
 #endif
+    using promise_type = awaitable_tasks::promise_handle<result_type_t>;
     // Construct from use_task special value.
     template<typename Allocator>
     promise_handler(use_task_t<Allocator> uf) {
-        data_ = std::allocate_shared<data>(uf.get_allocator());
-        data_->task_ = data_->promise_handle_.get_task();
+        promise_handle_ = std::allocate_shared<promise_type>(uf.get_allocator());
     }
 
     void operator()(T t) {
 #if ASIO_TASK_IMPL == ASIO_TASK_TUPLE
-        data_->promise_handle_.set_value(result_type_t(asio::error_code(), std::move(t)));
+        promise_handle_->set_value(result_type_t(asio::error_code(), std::move(t)));
 #else
-        data_->promise_handle_.set_value(std::move(t));
+        promise_handle_->set_value(std::move(t));
 #endif
     }
 
     void operator()(const asio::error_code& ec, T t) {
 #if ASIO_TASK_IMPL == ASIO_TASK_EXCEPTION
         if (ec) {
-            data_->promise_handle_.set_exception(std::make_exception_ptr(asio::system_error(ec)));
+            promise_handle_->set_exception(std::make_exception_ptr(asio::system_error(ec)));
         } else {
-            data_->promise_handle_.set_value(std::move(t));
+            promise_handle_->set_value(std::move(t));
         }
 #elif ASIO_TASK_IMPL == ASIO_TASK_TUPLE
-        data_->promise_handle_.set_value(result_type_t(ec, std::move(t)));
+        promise_handle_->set_value(result_type_t(ec, std::move(t)));
 #elif ASIO_TASK_IMPL == ASIO_TASK_MAPBOX_VARIANT
         if (ec) {
-            data_->promise_handle_.set_value(std::move(ec));
+            promise_handle_->set_value(std::move(ec));
         } else {
-            data_->promise_handle_.set_value(std::move(t));
+            promise_handle_->set_value(std::move(t));
         }
 #endif
     }
 
     // private:
-    struct data {
-        awaitable_tasks::promise_handle<result_type_t> promise_handle_;
-        awaitable_tasks::task<result_type_t> task_;
-    };
-    std::shared_ptr<data> data_;
+    std::shared_ptr<promise_type> promise_handle_;
 };
 
 // Completion handler to adapt a void promise as a completion handler.
@@ -158,36 +154,32 @@ class promise_handler<void> {
 #elif ASIO_TASK_IMPL == ASIO_TASK_MAPBOX_VARIANT
     using result_type_t = asio::error_code;
 #endif
+    using promise_type = awaitable_tasks::promise_handle<result_type_t>;
 
     // Construct from use_task special value. Used during rebinding.
     template<typename Allocator>
     promise_handler(use_task_t<Allocator> uf) {
-        data_ = std::allocate_shared<data>(uf.get_allocator());
-        data_->task_ = data_->promise_handle_.get_task();
+        promise_handle_ = std::allocate_shared<promise_type>(uf.get_allocator());
     }
 
-    void operator()() { data_->promise_handle_.resume(); }
+    void operator()() { promise_handle_->resume(); }
 
     void operator()(const asio::error_code& ec) {
 #if ASIO_TASK_IMPL == ASIO_TASK_EXCEPTION
         if (ec) {
-            data_->promise_handle_.set_exception(std::make_exception_ptr(asio::system_error(ec)));
+            promise_handle_->set_exception(std::make_exception_ptr(asio::system_error(ec)));
         } else {
-            data_->promise_handle_.set_value(std::move(ec));
+            promise_handle_->set_value(std::move(ec));
         }
 #elif ASIO_TASK_IMPL == ASIO_TASK_TUPLE
-        data_->promise_handle_.set_value(std::move(ec));
+        promise_handle_->set_value(std::move(ec));
 #elif ASIO_TASK_IMPL == ASIO_TASK_MAPBOX_VARIANT
-        data_->promise_handle_.set_value(std::move(ec));
+        promise_handle_->set_value(std::move(ec));
 #endif
     }
 
     // private:
-    struct data {
-        awaitable_tasks::promise_handle<result_type_t> promise_handle_;
-        awaitable_tasks::task<result_type_t> task_;
-    };
-    std::shared_ptr<data> data_;
+    std::shared_ptr<promise_type> promise_handle_;
 };
 
 #ifdef AWAITABLE_TASKS_CAPTURE_EXCEPTION
@@ -197,11 +189,11 @@ class promise_handler<void> {
 // caller via the task.
 template<typename Function, typename T>
 void asio_handler_invoke(Function f, promise_handler<T>* h) {
-    auto p(h->data_);
+    auto p(h->promise_handle_);
     try {
         f();
     } catch (...) {
-        p->promise_handle_.set_exception(std::current_exception());
+        p->set_exception(std::current_exception());
     }
 }
 #endif
@@ -218,7 +210,9 @@ class async_result<detail::promise_handler<T>> {
 
     // Constructor creates a new promise for the async operation, and obtains the
     // corresponding task.
-    explicit async_result(detail::promise_handler<T>& h) { task_ = std::move(h.data_->task_); }
+    explicit async_result(detail::promise_handler<T>& h) {
+        task_ = std::move(h.promise_handle_->get_task());
+    }
 
     // Obtain the task to be returned from the initiating function.
     type get() { return std::move(task_); }
