@@ -420,7 +420,7 @@ class task {
     std::enable_if_t<sizeof...(Args) == 1 && R::TaskOrRet::value, typename R::TaskReturn>
     then_impl(F&& func, detail::callable_traits<F(Args...)>) noexcept {
         auto callee_ctb = ctb_;
-        R::TaskReturn next_task = [](task t, std::decay_t<F> f) -> typename R::TaskReturn {
+        auto next_task = [](task t, std::decay_t<F> f) -> typename R::TaskReturn {
             auto&& value = co_await t;
             return co_await f(value);
         }
@@ -454,7 +454,7 @@ class task {
             typename R::TaskReturn>
     then_impl(F&& func, detail::callable_traits<F(Args...)>) noexcept {
         auto callee_ctb = ctb_;
-        R::TaskReturn next_task = [](task t, std::decay_t<F> f) -> typename R::TaskReturn {
+        auto next_task = [](task t, std::decay_t<F> f) -> typename R::TaskReturn {
             co_await t;
             auto ff = f();
             auto&& value = co_await ff;
@@ -488,7 +488,7 @@ class task {
             typename R::TaskReturn>
     then_impl(F&& func, detail::callable_traits<F(Args...)>) noexcept {
         auto callee_ctb = ctb_;
-        R::TaskReturn next_task = [](task t, std::decay_t<F> f) -> typename R::TaskReturn {
+        auto next_task = [](task t, std::decay_t<F> f) -> typename R::TaskReturn {
             auto&& value = co_await t;
             return f(value);
         }
@@ -521,7 +521,7 @@ class task {
             typename R::TaskReturn>
     then_impl(F&& func, detail::callable_traits<F(Args...)>) noexcept {
         auto callee_ctb = ctb_;
-        R::TaskReturn next_task = [](task t, std::decay_t<F> f) -> typename R::TaskReturn {
+        auto next_task = [](task t, std::decay_t<F> f) -> typename R::TaskReturn {
             co_await t;
             return f();
         }
@@ -572,7 +572,7 @@ typename Ctx::retrun_type when_all(InputIterator first, InputIterator last) {
     ctx->tasks_holder.reserve(all_task_count);
     using task_type = typename detail::isTaskOrRet<T>::Inner;
     for (size_t idx = 0; first != last; ++idx, ++first) {
-        ctx->tasks_holder.emplace_back((*first).then([ctx, idx](task_type& a) -> detail::Unkown {
+        ctx->tasks_holder.emplace_back((*first).then([ctx, idx](task_type& a) {
             auto& data = *ctx;
             if (data.task_count != 0) {
                 data.results[idx] = std::move(a);
@@ -623,7 +623,7 @@ typename Ctx::retrun_type when_n(InputIterator first, InputIterator last, size_t
     ctx->tasks_holder.reserve(n);
     using task_type = typename detail::isTaskOrRet<T>::Inner;
     for (size_t idx = 0; first != last; ++idx, ++first) {
-        ctx->tasks_holder.emplace_back((*first).then([ctx, idx](task_type& a) -> decltype(auto) {
+        ctx->tasks_holder.emplace_back((*first).then([ctx, idx](task_type& a) {
             auto& data = *ctx;
             if (data.task_count != 0) {
                 data.set_result(idx, a);
