@@ -17,6 +17,8 @@
 #endif
 
 namespace awaitable_tasks {
+template<typename T = void>
+using coroutine = std::experimental::coroutine_handle<T>;
 namespace ex = std::experimental;
 template<typename>
 class task;
@@ -93,10 +95,8 @@ struct CallArgsWith {
 };
 }
 
-struct shared_state : public ex::coroutine_handle<> {
-    shared_state(ex::coroutine_handle<> coro) {
-        *static_cast<ex::coroutine_handle<>*>(this) = coro;
-    }
+struct shared_state : public coroutine<> {
+    shared_state(coroutine<> coro) { *static_cast<coroutine<>*>(this) = coro; }
 
     bool is_self_release() { return self_release_; }
     void set_self_release(bool b) {
@@ -106,15 +106,13 @@ struct shared_state : public ex::coroutine_handle<> {
     }
     template<typename>
     friend class task;
-    template<typename>
-    friend class promise;
     ~shared_state() = default;
 
     bool valid() { return address() != nullptr; }
     void destroy_self() {
         if (valid())
             destroy();
-        *static_cast<ex::coroutine_handle<>*>(this) = nullptr;
+        *static_cast<coroutine<>*>(this) = nullptr;
     }
     void destroy_chain() { recursive_destroy(this); }
 
@@ -209,8 +207,8 @@ class promise_handle : public promise_handle<> {
     }
     void set_exception(std::exception_ptr eptr) {
         _ASSERT(!is_done());
-        auto coro = static_cast<ex::coroutine_handle<
-            task<T>::promise_type>*>(static_cast<ex::coroutine_handle<>*>(ctb_.get()));
+        auto coro =
+            static_cast<coroutine<task<T>::promise_type>*>(static_cast<coroutine<>*>(ctb_.get()));
         coro->promise().set_eptr(std::move(eptr));
         resume();
     }
@@ -239,7 +237,7 @@ class task {
             struct final_awaiter {
                 promise_type* me;
                 bool await_ready() noexcept { return false; }
-                void await_suspend(ex::coroutine_handle<>) noexcept {
+                void await_suspend(coroutine<>) noexcept {
                     // if suspend by caller , then resume to it.
                     if (me->caller_)
                         me->caller_();
@@ -271,7 +269,7 @@ class task {
             result_ = std::move(value);
         }
 #endif
-        void set_caller(ex::coroutine_handle<> caller_coro) noexcept { caller_ = caller_coro; }
+        void set_caller(coroutine<> caller_coro) noexcept { caller_ = caller_coro; }
         void throw_if_exception() const {
 #ifdef AWAITABLE_TASKS_VARIANT
             if (result_.which() == result_.which<std::exception_ptr>())
@@ -285,7 +283,7 @@ class task {
         }
 
         auto& get_result() { return result_; }
-//#define AWAIT_TASKS_TRACE_PROMISE
+#define AWAIT_TASKS_TRACE_PROMISE
 #ifdef AWAIT_TASKS_TRACE_PROMISE
         using alloc_of_char_type = std::allocator<char>;
         void* operator new(size_t size) {
@@ -313,7 +311,7 @@ class task {
         std::exception_ptr eptr_ = nullptr;
         result_type result_{};
 #endif
-        ex::coroutine_handle<> caller_;
+        coroutine<> caller_;
     };
     bool await_ready() noexcept { return is_done_or_empty(); }
 
@@ -325,12 +323,12 @@ class task {
         return std::move(coro_.promise().get_result());
 #endif
     }
-    void await_suspend(ex::coroutine_handle<> caller_coro) noexcept {
+    void await_suspend(coroutine<> caller_coro) noexcept {
         coro_.promise().set_caller(caller_coro);
     }
 
     explicit task(promise_type& prom) noexcept
-        : coro_(ex::coroutine_handle<promise_type>::from_promise(prom)) {
+        : coro_(coroutine<promise_type>::from_promise(prom)) {
         ctb_ = std::make_shared<shared_state>(coro_);
     }
 
@@ -388,7 +386,7 @@ class task {
     friend class promise_handle;
 
     std::shared_ptr<shared_state> ctb_;
-    ex::coroutine_handle<promise_type> coro_ = nullptr;
+    coroutine<promise_type> coro_ = nullptr;
 
 #pragma region then_impl
   public:
