@@ -139,6 +139,7 @@ class promise_handle;
 template<>
 class promise_handle<void> {
   public:
+    promise_handle() = default;
     template<typename V>
     promise_handle(const promise_handle<V>& rhs) noexcept {
         ctb_ = rhs.ctb_;
@@ -182,7 +183,6 @@ class promise_handle<void> {
     }
 
   protected:
-    promise_handle() = default;
     std::shared_ptr<shared_state> ctb_;
     std::shared_ptr<void> result_;
 };
