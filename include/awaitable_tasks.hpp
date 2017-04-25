@@ -203,7 +203,7 @@ class promise_handle : public promise_handle<> {
 
     template<typename U>
     void set_value(U&& value) {
-        *((T*)(result_).get()) = std::forward<U>(value);
+        *reinterpret_cast<T*>(result_.get()) = std::forward<U>(value);
         resume();
     }
     void set_exception(std::exception_ptr eptr) {
