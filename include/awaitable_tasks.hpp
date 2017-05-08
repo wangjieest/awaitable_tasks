@@ -15,6 +15,12 @@
 #include "mapbox/variant.hpp"
 #endif
 
+#pragma pack(push)
+#ifdef _WIN64
+#pragma pack(8)
+#else
+#pragma pack(8)
+#endif
 namespace awaitable_tasks {
 template<typename T = void>
 using coroutine = std::experimental::coroutine_handle<T>;
@@ -97,37 +103,37 @@ struct CallArgsWith {
 struct shared_state : public coroutine<> {
     shared_state(coroutine<> coro) { *static_cast<coroutine<>*>(this) = coro; }
 
-    bool is_self_release() { return self_release_; }
-    void set_self_release(bool b) {
-        self_release_ = b;
+    bool is_release_by_task() { return release_by_task_; }
+    void set_release_by_task(bool b) {
+        release_by_task_ = b;
         if (next_)
-            next_->set_self_release(b);
+            next_->set_release_by_task(b);
     }
     template<typename>
     friend class task;
     ~shared_state() = default;
 
     bool valid() { return address() != nullptr; }
-    void destroy_self() {
+    void destroy_state() {
         if (valid())
             destroy();
         *static_cast<coroutine<>*>(this) = nullptr;
     }
-    void destroy_chain() { recursive_destroy(this); }
+    void destroy_state_chain() { recursive_destroy(this); }
 
   protected:
     static void recursive_destroy(shared_state* target) {
         if (target) {
             if (target->next_)
                 recursive_destroy(target->next_.get());
-            if (!target->is_self_release())
-                target->destroy_self();
+            if (!target->is_release_by_task())
+                target->destroy_state();
         }
     }
 
   protected:
     std::shared_ptr<shared_state> next_;
-    bool self_release_ = true;
+    bool release_by_task_ = true;
 };
 
 template<typename T = void>
@@ -170,12 +176,12 @@ class promise_handle<void> {
     bool is_done() noexcept { return ctb_ && ctb_->done(); }
     void cancel_self_release() {
         if (ctb_)
-            ctb_->set_self_release(false);
+            ctb_->set_release_by_task(false);
     }
 
     ~promise_handle() {
-        if (valid() && !ctb_->is_self_release()) {
-            ctb_->destroy_chain();
+        if (valid() && !ctb_->is_release_by_task()) {
+            ctb_->destroy_state_chain();
         }
     }
 
@@ -204,8 +210,6 @@ class promise_handle : public promise_handle<> {
         *reinterpret_cast<T*>(result_.get()) = std::forward<U>(value);
         resume();
     }
-
-    void unhandled_exception() { set_exception(std::current_exception()); }
     void set_exception(std::exception_ptr eptr) {
         _ASSERT(!is_done());
         auto coro =
@@ -237,7 +241,10 @@ class task {
         auto final_suspend() noexcept {
             struct final_awaiter {
                 promise_type* me;
-                bool await_ready() noexcept { return false; }
+                bool await_ready() noexcept {
+                    // suspend point
+                    return false;
+                }
                 void await_suspend(coroutine<>) noexcept {
                     // if suspend by caller , then resume to it.
                     if (me->caller_)
@@ -352,13 +359,13 @@ class task {
 
     void reset() noexcept {
         if (coro_) {
-            ctb_->destroy_self();
+            ctb_->destroy_state();
             coro_ = nullptr;
         }
     }
 
     ~task() noexcept {
-        if (ctb_ && ctb_->is_self_release())
+        if (ctb_ && ctb_->is_release_by_task())
             reset();
     }
 
@@ -426,7 +433,7 @@ class task {
             return co_await f(value);
         }
         (std::move(*this), std::move(func));
-        next_task.ctb_->set_self_release(callee_ctb->is_self_release());
+        next_task.ctb_->set_release_by_task(callee_ctb->is_release_by_task());
         callee_ctb->next_ = next_task.ctb_;
         return std::move(next_task);
     }
@@ -443,7 +450,7 @@ class task {
             return co_await f();
             return value;
         }(std::move(*this), std::move(func));
-        next_task.ctb_->set_self_release(callee_ctb->is_self_release());
+        next_task.ctb_->set_release_by_task(callee_ctb->is_release_by_task());
         callee_ctb->next_ = next_task.ctb_;
         return std::move(next_task);
     }
@@ -462,7 +469,7 @@ class task {
             return value;
         }
         (std::move(*this), std::move(func));
-        next_task.ctb_->set_self_release(callee_ctb->is_self_release());
+        next_task.ctb_->set_release_by_task(callee_ctb->is_release_by_task());
         callee_ctb->next_ = next_task.ctb_;
         return std::move(next_task);
     }
@@ -478,7 +485,7 @@ class task {
             f(value);
             return value;
         }(std::move(*this), std::forward<F>(func));
-        next_task.ctb_->set_self_release(callee_ctb->is_self_release());
+        next_task.ctb_->set_release_by_task(callee_ctb->is_release_by_task());
         callee_ctb->next_ = next_task.ctb_;
         return std::move(next_task);
     }
@@ -494,7 +501,7 @@ class task {
             return f(value);
         }
         (std::move(*this), std::forward<F>(func));
-        next_task.ctb_->set_self_release(callee_ctb->is_self_release());
+        next_task.ctb_->set_release_by_task(callee_ctb->is_release_by_task());
         callee_ctb->next_ = next_task.ctb_;
         return std::move(next_task);
     }
@@ -511,7 +518,7 @@ class task {
             return value;
         }
         (std::move(*this), std::forward<F>(func));
-        next_task.ctb_->set_self_release(callee_ctb->is_self_release());
+        next_task.ctb_->set_release_by_task(callee_ctb->is_release_by_task());
         callee_ctb->next_ = next_task.ctb_;
         return std::move(next_task);
     }
@@ -527,7 +534,7 @@ class task {
             return f();
         }
         (std::move(*this), std::forward<F>(func));
-        next_task.ctb_->set_self_release(callee_ctb->is_self_release());
+        next_task.ctb_->set_release_by_task(callee_ctb->is_release_by_task());
         callee_ctb->next_ = next_task.ctb_;
         return std::move(next_task);
     }
@@ -714,3 +721,5 @@ decltype(auto) when_any(task<T>& t, Ts&... ts) {
 #endif
 }
 #pragma endregion
+
+#pragma pack(pop)
