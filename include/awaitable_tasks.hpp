@@ -10,8 +10,7 @@
 
 #define AWAITABLE_TASKS_CAPTURE_EXCEPTION
 
-//#define AWAITABLE_TASKS_VARIANT
-
+#define AWAITABLE_TASKS_VARIANT
 #ifdef AWAITABLE_TASKS_VARIANT
 #include "mapbox/variant.hpp"
 #endif
@@ -205,6 +204,8 @@ class promise_handle : public promise_handle<> {
         *reinterpret_cast<T*>(result_.get()) = std::forward<U>(value);
         resume();
     }
+
+    void unhandled_exception() { set_exception(std::current_exception()); }
     void set_exception(std::exception_ptr eptr) {
         _ASSERT(!is_done());
         auto coro =
