@@ -10,9 +10,11 @@
 
 #define AWAITABLE_TASKS_CAPTURE_EXCEPTION
 
-#define AWAITABLE_TASKS_VARIANT
-#ifdef AWAITABLE_TASKS_VARIANT
+#define AWAITABLE_TASKS_VARIANT_MPARK
+#if defined(AWAITABLE_TASKS_VARIANT_MAPBOX)
 #include "mapbox/variant.hpp"
+#elif defined(AWAITABLE_TASKS_VARIANT_MPARK)
+#include "mpark/include/mpark/variant.hpp"
 #endif
 
 #pragma pack(push)
@@ -261,10 +263,11 @@ class task {
         }
 
 #ifdef AWAITABLE_TASKS_CAPTURE_EXCEPTION
+        void uncought_exceptions() { set_eptr(std::current_exception()); }
         void set_exception(std::exception_ptr eptr) noexcept { set_eptr(std::move(eptr)); }
 #endif
 
-#ifdef AWAITABLE_TASKS_VARIANT
+#if defined(AWAITABLE_TASKS_VARIANT_MAPBOX) || defined(AWAITABLE_TASKS_VARIANT_MPARK)
         void set_eptr(std::exception_ptr eptr) noexcept { result_ = std::move(eptr); }
         template<typename U>
         void set_value(U&& value) {
@@ -279,10 +282,15 @@ class task {
 #endif
         void set_caller(coroutine<> caller_coro) noexcept { caller_ = caller_coro; }
         void throw_if_exception() const {
-#ifdef AWAITABLE_TASKS_VARIANT
+#if defined(AWAITABLE_TASKS_VARIANT_MAPBOX)
             if (result_.which() == result_.which<std::exception_ptr>())
                 std::rethrow_exception(result_.get<std::exception_ptr>());
             else if (result_.which() != result_.which<result_type>())
+                throw std::runtime_error("value not returned");
+#elif defined(AWAITABLE_TASKS_VARIANT_MPARK)
+            if (mpark::get_if<std::exception_ptr>(&result_))
+                std::rethrow_exception(mpark::get<std::exception_ptr>(result_));
+            else if (mpark::get_if<monostate>(&result_))
                 throw std::runtime_error("value not returned");
 #else
             if (eptr_)
@@ -307,7 +315,7 @@ class task {
             return al.deallocate(static_cast<char*>(ptr), size);
         }
 #endif
-#ifdef AWAITABLE_TASKS_VARIANT
+#if defined(AWAITABLE_TASKS_VARIANT_MAPBOX)
         template<typename V>
         auto& get_result() {
             return result_.get<V>();
@@ -315,6 +323,14 @@ class task {
 
         struct monostate {};
         mapbox::util::variant<monostate, result_type, std::exception_ptr> result_;
+#elif defined(AWAITABLE_TASKS_VARIANT_MPARK)
+        template<typename V>
+        auto& get_result() {
+            return mpark::get<V>(result_);
+        }
+
+        struct monostate {};
+        mpark::variant<monostate, result_type, std::exception_ptr> result_;
 #else
         std::exception_ptr eptr_ = nullptr;
         result_type result_{};
@@ -325,7 +341,7 @@ class task {
 
     T await_resume() {
         coro_.promise().throw_if_exception();
-#ifdef AWAITABLE_TASKS_VARIANT
+#if defined(AWAITABLE_TASKS_VARIANT_MAPBOX) || defined(AWAITABLE_TASKS_VARIANT_MPARK)
         return std::move(coro_.promise().get_result<T>());
 #else
         return std::move(coro_.promise().get_result());
@@ -373,12 +389,15 @@ class task {
     bool is_done_or_empty() noexcept { return coro_ ? coro_.done() : true; }
     const T* value_ref() {
         if (coro_) {
-#ifdef AWAITABLE_TASKS_VARIANT
+#if defined(AWAITABLE_TASKS_VARIANT_MAPBOX)
             auto& result = coro_.promise().get_result();
             if (result.which() == result.which<T>())
                 return &result.get<T>();
             else
                 return nullptr;
+#elif defined(AWAITABLE_TASKS_VARIANT_MPARK)
+            auto& result = coro_.promise().get_result();
+            return mpark::get_if<T>(&result);
 #else
             return &coro_.promise().get_result();
 #endif
@@ -660,26 +679,19 @@ task<Pair> when_any(InputIterator first, InputIterator last) {
 #include <array>
 namespace awaitable_tasks {
 namespace detail {
+template<bool any, typename... Ts>
+struct when_variadic_context;
 template<typename... Ts>
-struct when_variadic_context {
-#ifdef ASIO_TASK_MAPBOX_VARIANT
-    using result_type = mapbox::util::variant<std::decay_t<typename isTaskOrRet<Ts>::Inner>...>;
-#else
+struct when_variadic_context<false, Ts...> {
     using result_type = std::tuple<std::decay_t<typename isTaskOrRet<Ts>::Inner>...>;
-#endif
     using data_type = result_type;
     using task_type = task<data_type>;
 
     template<bool any, size_t I, typename T>
     inline void set_variadic_result(T& t) {
         if (task_count != 0) {
-#ifdef ASIO_TASK_MAPBOX_VARIANT
-            results = std::move(t);
-#else
             std::get<I>(results) = std::move(t);
-#endif
-            bool trigger = any;
-            if (trigger && --task_count == 0) {
+            if (--task_count == 0) {
                 handle.resume();
             }
         }
@@ -695,7 +707,7 @@ inline decltype(auto) task_transform(T& t, F&& f) {
     return t.then(std::move(f));
 }
 
-template<bool any, size_t... Is, typename... Ts, typename Ctx = when_variadic_context<Ts...>>
+template<bool any, size_t... Is, typename... Ts, typename Ctx = when_variadic_context<any, Ts...>>
 typename Ctx::task_type when_variant_impl(std::index_sequence<Is...>, Ts&... ts) {
     auto ctx = std::make_shared<Ctx>();
     ctx->tasks_holder = {
@@ -713,7 +725,31 @@ decltype(auto) when_all(task<T>& t, Ts&... ts) {
                                             t,
                                             ts...);
 }
-#ifdef AWAITABLE_TASKS_VARIANT
+#if defined(AWAITABLE_TASKS_VARIANT_MPARK) || defined(AWAITABLE_TASKS_VARIANT_MPARK)
+namespace detail {
+template<typename... Ts>
+struct when_variadic_context<true, Ts...> {
+#if defined(AWAITABLE_TASKS_VARIANT_MAPBOX)
+    using result_type = mapbox::util::variant<std::decay_t<typename isTaskOrRet<Ts>::Inner>...>;
+#elif defined(AWAITABLE_TASKS_VARIANT_MPARK)
+    using result_type = mpark::variant<std::decay_t<typename isTaskOrRet<Ts>::Inner>...>;
+#endif
+    using data_type = result_type;
+    using task_type = task<data_type>;
+
+    template<bool any, size_t I, typename T>
+    inline void set_variadic_result(T& t) {
+        if (task_count != 0) {
+            results = std::move(t);
+            handle.resume();
+        }
+    }
+    promise_handle<detail::Unkown> handle;
+    data_type results;
+    size_t task_count = sizeof...(Ts);
+    std::array<task<Unkown>, sizeof...(Ts)> tasks_holder;
+};
+}
 template<typename T, typename... Ts>
 decltype(auto) when_any(task<T>& t, Ts&... ts) {
     return detail::when_variant_impl<true>(std::make_index_sequence<sizeof...(Ts) + 1>{}, t, ts...);
