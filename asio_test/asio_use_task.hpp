@@ -27,18 +27,20 @@
 
 #define ASIO_TASK_EXCEPTION 0
 #define ASIO_TASK_TUPLE 1
-#define ASIO_TASK_MAPBOX_VARIANT_MAPBOX 2
-#define ASIO_TASK_MAPBOX_VARIANT_MPARK 3
+#define ASIO_TASK_VARIANT_MAPBOX 2
+#define ASIO_TASK_VARIANT_MPARK 3
+#define ASIO_TASK_VARIANT_STD 3
 
 #ifndef ASIO_TASK_IMPL
-#define ASIO_TASK_IMPL ASIO_TASK_MAPBOX_VARIANT_MPARK
+#define ASIO_TASK_IMPL ASIO_TASK_VARIANT_MPARK
 #endif
 
-#if ASIO_TASK_IMPL == ASIO_TASK_MAPBOX_VARIANT_MAPBOX
+#if ASIO_TASK_IMPL == ASIO_TASK_VARIANT_MAPBOX
 #include "mapbox/variant.hpp"
-#endif
-#if ASIO_TASK_IMPL == ASIO_TASK_MAPBOX_VARIANT_MPARK
+#elif ASIO_TASK_IMPL == ASIO_TASK_VARIANT_MPARK
 #include "mpark/include/mpark/variant.hpp"
+#elif ASIO_TASK_IMPL == ASIO_TASK_VARIANT_STD
+#include <variant>
 #endif
 
 namespace asio {
@@ -107,10 +109,12 @@ class promise_handler {
     using result_type_t = T;
 #elif ASIO_TASK_IMPL == ASIO_TASK_TUPLE
     using result_type_t = std::tuple<asio::error_code, T>;
-#elif ASIO_TASK_IMPL == ASIO_TASK_MAPBOX_VARIANT_MAPBOX
+#elif ASIO_TASK_IMPL == ASIO_TASK_VARIANT_MAPBOX
     using result_type_t = mapbox::util::variant<asio::error_code, T>;
-#elif ASIO_TASK_IMPL == ASIO_TASK_MAPBOX_VARIANT_MPARK
-      using result_type_t = mpark::variant<asio::error_code, T>;
+#elif ASIO_TASK_IMPL == ASIO_TASK_VARIANT_MPARK
+    using result_type_t = mpark::variant<asio::error_code, T>;
+#elif ASIO_TASK_IMPL == ASIO_TASK_VARIANT_STD
+    using result_type_t = std::variant<asio::error_code, T>;
 #endif
     using promise_type = awaitable_tasks::promise_handle<result_type_t>;
     // Construct from use_task special value.
@@ -136,17 +140,11 @@ class promise_handler {
         }
 #elif ASIO_TASK_IMPL == ASIO_TASK_TUPLE
         promise_handle_->set_value(result_type_t(ec, std::move(t)));
-#elif ASIO_TASK_IMPL == ASIO_TASK_MAPBOX_VARIANT_MAPBOX
+#elif ASIO_TASK_IMPL == ASIO_TASK_VARIANT_MAPBOX || ASIO_TASK_IMPL == ASIO_TASK_VARIANT_MPARK || \
+    ASIO_TASK_IMPL == ASIO_TASK_VARIANT_STD
         if (ec) {
             promise_handle_->set_value(std::move(ec));
         } else {
-            promise_handle_->set_value(std::move(t));
-        }
-#elif ASIO_TASK_IMPL == ASIO_TASK_MAPBOX_VARIANT_MPARK
-        if (ec) {
-            promise_handle_->set_value(std::move(ec));
-        }
-        else {
             promise_handle_->set_value(std::move(t));
         }
 #endif
@@ -160,15 +158,7 @@ class promise_handler {
 template<>
 class promise_handler<void> {
   public:
-#if ASIO_TASK_IMPL == ASIO_TASK_EXCEPTION
     using result_type_t = asio::error_code;
-#elif ASIO_TASK_IMPL == ASIO_TASK_TUPLE
-    using result_type_t = asio::error_code;
-#elif ASIO_TASK_IMPL == ASIO_TASK_MAPBOX_VARIANT_MAPBOX
-    using result_type_t = asio::error_code;
-#elif ASIO_TASK_IMPL == ASIO_TASK_MAPBOX_VARIANT_MPARK
-      using result_type_t = asio::error_code;
-#endif
     using promise_type = awaitable_tasks::promise_handle<result_type_t>;
 
     // Construct from use_task special value. Used during rebinding.
@@ -186,11 +176,7 @@ class promise_handler<void> {
         } else {
             promise_handle_->set_value(std::move(ec));
         }
-#elif ASIO_TASK_IMPL == ASIO_TASK_TUPLE
-        promise_handle_->set_value(std::move(ec));
-#elif ASIO_TASK_IMPL == ASIO_TASK_MAPBOX_VARIANT_MAPBOX
-        promise_handle_->set_value(std::move(ec));
-#elif ASIO_TASK_IMPL == ASIO_TASK_MAPBOX_VARIANT_MPARK
+#else
         promise_handle_->set_value(std::move(ec));
 #endif
     }
@@ -257,7 +243,8 @@ struct handler_type<use_task_t<Allocator>, ReturnType(asio::error_code, Arg2)> {
 };
 
 // Handler type specialisation for special arg asio::error_code.
-#if ASIO_TASK_IMPL == ASIO_TASK_MAPBOX_VARIANT_MAPBOX
+#if ASIO_TASK_IMPL == ASIO_TASK_VARIANT_MAPBOX || ASIO_TASK_IMPL == ASIO_TASK_VARIANT_MAPBOX || \
+    ASIO_TASK_IMPL == ASIO_TASK_VARIANT_STD
 #else
 template<typename Allocator, typename ReturnType>
 struct handler_type<use_task_t<Allocator>, ReturnType(asio::error_code)> {

@@ -15,6 +15,8 @@
 #include "mapbox/variant.hpp"
 #elif defined(AWAITABLE_TASKS_VARIANT_MPARK)
 #include "mpark/include/mpark/variant.hpp"
+#elif defined(AWAITABLE_TASKS_VARIANT_STD)
+#include <variant>
 #endif
 
 #pragma pack(push)
@@ -24,6 +26,11 @@
 #pragma pack(8)
 #endif
 namespace awaitable_tasks {
+#if defined(AWAITABLE_TASKS_VARIANT_STD)
+namespace ns_variant = std;
+#elif defined(AWAITABLE_TASKS_VARIANT_MPARK)
+namespace ns_variant = mpark;
+#endif
 template<typename T = void>
 using coroutine = std::experimental::coroutine_handle<T>;
 namespace ex = std::experimental;
@@ -267,19 +274,17 @@ class task {
         void set_exception(std::exception_ptr eptr) noexcept { set_eptr(std::move(eptr)); }
 #endif
 
-#if defined(AWAITABLE_TASKS_VARIANT_MAPBOX) || defined(AWAITABLE_TASKS_VARIANT_MPARK)
+#if defined(AWAITABLE_TASKS_VARIANT_MAPBOX) || defined(AWAITABLE_TASKS_VARIANT_MPARK) || \
+    defined(AWAITABLE_TASKS_VARIANT_STD)
         void set_eptr(std::exception_ptr eptr) noexcept { result_ = std::move(eptr); }
-        template<typename U>
-        void set_value(U&& value) {
-            result_ = std::move(value);
-        }
 #else
         void set_eptr(std::exception_ptr eptr) noexcept { eptr_ = std::move(eptr); }
+#endif
         template<typename U>
         void set_value(U&& value) {
             result_ = std::move(value);
         }
-#endif
+
         void set_caller(coroutine<> caller_coro) noexcept { caller_ = caller_coro; }
         void throw_if_exception() const {
 #if defined(AWAITABLE_TASKS_VARIANT_MAPBOX)
@@ -287,10 +292,10 @@ class task {
                 std::rethrow_exception(result_.get<std::exception_ptr>());
             else if (result_.which() != result_.which<result_type>())
                 throw std::runtime_error("value not returned");
-#elif defined(AWAITABLE_TASKS_VARIANT_MPARK)
-            if (mpark::get_if<std::exception_ptr>(&result_))
-                std::rethrow_exception(mpark::get<std::exception_ptr>(result_));
-            else if (mpark::get_if<monostate>(&result_))
+#elif defined(AWAITABLE_TASKS_VARIANT_MPARK) || defined(AWAITABLE_TASKS_VARIANT_STD)
+            if (ns_variant::get_if<std::exception_ptr>(&result_))
+                std::rethrow_exception(ns_variant::get<std::exception_ptr>(result_));
+            else if (ns_variant::get_if<monostate>(&result_))
                 throw std::runtime_error("value not returned");
 #else
             if (eptr_)
@@ -316,21 +321,11 @@ class task {
         }
 #endif
 #if defined(AWAITABLE_TASKS_VARIANT_MAPBOX)
-        template<typename V>
-        auto& get_result() {
-            return result_.get<V>();
-        }
-
         struct monostate {};
         mapbox::util::variant<monostate, result_type, std::exception_ptr> result_;
-#elif defined(AWAITABLE_TASKS_VARIANT_MPARK)
-        template<typename V>
-        auto& get_result() {
-            return mpark::get<V>(result_);
-        }
-
+#elif defined(AWAITABLE_TASKS_VARIANT_MPARK) || defined(AWAITABLE_TASKS_VARIANT_STD)
         struct monostate {};
-        mpark::variant<monostate, result_type, std::exception_ptr> result_;
+        ns_variant::variant<monostate, result_type, std::exception_ptr> result_;
 #else
         std::exception_ptr eptr_ = nullptr;
         result_type result_{};
@@ -341,8 +336,10 @@ class task {
 
     T await_resume() {
         coro_.promise().throw_if_exception();
-#if defined(AWAITABLE_TASKS_VARIANT_MAPBOX) || defined(AWAITABLE_TASKS_VARIANT_MPARK)
-        return std::move(coro_.promise().get_result<T>());
+#if defined(AWAITABLE_TASKS_VARIANT_MAPBOX)
+        return std::move(coro_.promise().get_result().get<T>());
+#elif defined(AWAITABLE_TASKS_VARIANT_MPARK) || defined(AWAITABLE_TASKS_VARIANT_STD)
+        return std::move(ns_variant::get<T>(coro_.promise().get_result()));
 #else
         return std::move(coro_.promise().get_result());
 #endif
@@ -395,9 +392,9 @@ class task {
                 return &result.get<T>();
             else
                 return nullptr;
-#elif defined(AWAITABLE_TASKS_VARIANT_MPARK)
+#elif defined(AWAITABLE_TASKS_VARIANT_MPARK) || defined(AWAITABLE_TASKS_VARIANT_STD)
             auto& result = coro_.promise().get_result();
-            return mpark::get_if<T>(&result);
+            return ns_variant::get_if<T>(&result);
 #else
             return &coro_.promise().get_result();
 #endif
@@ -725,14 +722,15 @@ decltype(auto) when_all(task<T>& t, Ts&... ts) {
                                             t,
                                             ts...);
 }
-#if defined(AWAITABLE_TASKS_VARIANT_MPARK) || defined(AWAITABLE_TASKS_VARIANT_MPARK)
+#if defined(AWAITABLE_TASKS_VARIANT_MAPBOX) || defined(AWAITABLE_TASKS_VARIANT_MPARK) || \
+    defined(AWAITABLE_TASKS_VARIANT_STD)
 namespace detail {
 template<typename... Ts>
 struct when_variadic_context<true, Ts...> {
 #if defined(AWAITABLE_TASKS_VARIANT_MAPBOX)
     using result_type = mapbox::util::variant<std::decay_t<typename isTaskOrRet<Ts>::Inner>...>;
-#elif defined(AWAITABLE_TASKS_VARIANT_MPARK)
-    using result_type = mpark::variant<std::decay_t<typename isTaskOrRet<Ts>::Inner>...>;
+#elif defined(AWAITABLE_TASKS_VARIANT_MPARK) || defined(AWAITABLE_TASKS_VARIANT_STD)
+    using result_type = ns_variant::variant<std::decay_t<typename isTaskOrRet<Ts>::Inner>...>;
 #endif
     using data_type = result_type;
     using task_type = task<data_type>;
