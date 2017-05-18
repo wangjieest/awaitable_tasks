@@ -11,6 +11,7 @@
 #define AWAITABLE_TASKS_CAPTURE_EXCEPTION
 
 #define AWAITABLE_TASKS_VARIANT_MPARK
+
 #if defined(AWAITABLE_TASKS_VARIANT_MAPBOX)
 #include "mapbox/variant.hpp"
 #elif defined(AWAITABLE_TASKS_VARIANT_MPARK)
@@ -26,7 +27,9 @@
 #pragma pack(8)
 #endif
 namespace awaitable_tasks {
-#if defined(AWAITABLE_TASKS_VARIANT_STD)
+#if defined(AWAITABLE_TASKS_VARIANT_MAPBOX)
+namespace ns_variant = mapbox::util;
+#elif defined(AWAITABLE_TASKS_VARIANT_STD)
 namespace ns_variant = std;
 #elif defined(AWAITABLE_TASKS_VARIANT_MPARK)
 namespace ns_variant = mpark;
@@ -320,10 +323,8 @@ class task {
             return al.deallocate(static_cast<char*>(ptr), size);
         }
 #endif
-#if defined(AWAITABLE_TASKS_VARIANT_MAPBOX)
-        struct monostate {};
-        mapbox::util::variant<monostate, result_type, std::exception_ptr> result_;
-#elif defined(AWAITABLE_TASKS_VARIANT_MPARK) || defined(AWAITABLE_TASKS_VARIANT_STD)
+#if defined(AWAITABLE_TASKS_VARIANT_MAPBOX) || defined(AWAITABLE_TASKS_VARIANT_MPARK) || \
+    defined(AWAITABLE_TASKS_VARIANT_STD)
         struct monostate {};
         ns_variant::variant<monostate, result_type, std::exception_ptr> result_;
 #else
@@ -727,11 +728,7 @@ decltype(auto) when_all(task<T>& t, Ts&... ts) {
 namespace detail {
 template<typename... Ts>
 struct when_variadic_context<true, Ts...> {
-#if defined(AWAITABLE_TASKS_VARIANT_MAPBOX)
-    using result_type = mapbox::util::variant<std::decay_t<typename isTaskOrRet<Ts>::Inner>...>;
-#elif defined(AWAITABLE_TASKS_VARIANT_MPARK) || defined(AWAITABLE_TASKS_VARIANT_STD)
     using result_type = ns_variant::variant<std::decay_t<typename isTaskOrRet<Ts>::Inner>...>;
-#endif
     using data_type = result_type;
     using task_type = task<data_type>;
 
