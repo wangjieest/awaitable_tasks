@@ -2,7 +2,7 @@
 #include <experimental/resumable>
 #include <memory>
 
-#if 1
+#if 0
 #define AWAITABLE_TASKS_TRACE(fmt, ...) printf("\n" fmt "\n", ##__VA_ARGS__)
 #else
 #define AWAITABLE_TASKS_TRACE(fmt, ...)
@@ -176,7 +176,7 @@ class promise_handle<void> {
     }
 
     bool resume() {
-        if (valid() && !ctb_->done()) {
+        if (is_valid() && !is_done()) {
             ctb_->resume();
             return true;
         }
@@ -184,7 +184,7 @@ class promise_handle<void> {
     }
     void operator()() { resume(); }
 
-    bool valid() noexcept { return ctb_ && ctb_->valid(); }
+    bool is_valid() noexcept { return ctb_ && ctb_->valid(); }
     bool is_done() noexcept { return ctb_ && ctb_->done(); }
     void cancel_self_release() {
         if (ctb_)
@@ -192,7 +192,7 @@ class promise_handle<void> {
     }
 
     ~promise_handle() {
-        if (valid() && !ctb_->is_release_by_task()) {
+        if (is_valid() && !ctb_->is_release_by_task()) {
             ctb_->destroy_state_chain();
         }
     }
@@ -307,7 +307,7 @@ class task {
         }
 
         auto& get_result() { return result_; }
-#define AWAIT_TASKS_TRACE_PROMISE
+// #define AWAIT_TASKS_TRACE_PROMISE
 #ifdef AWAIT_TASKS_TRACE_PROMISE
         using alloc_of_char_type = std::allocator<char>;
         void* operator new(size_t size) {
