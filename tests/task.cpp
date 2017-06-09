@@ -8,7 +8,55 @@
 #pragma warning(disable : 4100 4189)
 int g_data = 42;
 
+template<typename T>
+struct Param {
+    T value;
+    Param() { std::cout << "default ctor" << std::endl; }
+    Param(T v) : value(std::move(v)) { std::cout << "value ctor" << std::endl; }
+    Param(Param&& rhs) : value(std::move(rhs.value)) { std::cout << "move ctor" << std::endl; }
+    Param(const Param& rhs) : value(std::move(rhs.value)) { std::cout << "copy ctor" << std::endl; }
+    Param& operator=(Param&& rhs) {
+        value = std::move(rhs.value);
+        std::cout << "move assign" << std::endl;
+        return *this;
+    }
+    Param& operator=(const Param& rhs) {
+        value = rhs.value;
+        std::cout << "copy assign" << std::endl;
+        return *this;
+    }
+    ~Param() { std::cout << "dtor" << std::endl; }
+};
+#define FWD(x) std::forward<decltype(x)>(x)
+template<typename T>
+auto calc(T&& t) {
+    std::cout << t.value << std::endl;
+    return 1;
+}
+template<typename T1, typename T2, typename... Ts>
+auto calc(T1&& t1, T2&& t2, Ts&&... ts) {
+    return calc(FWD(t1)) + calc(FWD(t2), FWD(ts)...);
+}
+
+void test_capture() {
+    {
+        Param<std::string> v1("122341234123412341234123412341434535345345345345345345345345");
+        Param<std::string> v2("dsfdfasdfasdfasdfasdfasdfasdfasdfasdfssdfasdfasdfasdfasdsdfa");
+        auto ttt = [](auto... args) -> awaitable_tasks::task<int> {
+            auto f = [&] {
+                calc(args...);
+                return 2;
+            };
+            co_await awaitable_tasks::ex::suspend_never{};
+            return f();
+        }(v1, v2, v1);
+        auto v = ttt.value_ref();
+    }
+}
+
 int main() {
+    test_capture();
+
     using fn = int (*)();
     fn func = []() -> int {
         std::cout << ++g_data << " in func " << std::endl;
@@ -64,10 +112,11 @@ int main() {
 
         awaitable_tasks::promise_handle<int> old_task2_handle;
         // lambdas capture error, so set it static
-        static auto old_task2 = old_task2_handle.get_task().then([]() -> short {
-            std::cout << "end" << std::endl;
-            return 44;
-        });
+        static awaitable_tasks::task<short> old_task2 =
+            old_task2_handle.get_task().then([]() -> short {
+                std::cout << "end" << std::endl;
+                return 44;
+            });
 
         auto new_task = old_task.then(func2)
                             .then([](int& v) -> short {

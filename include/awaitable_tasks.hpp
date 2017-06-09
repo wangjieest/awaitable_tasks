@@ -242,10 +242,15 @@ class promise_handle : public promise_handle<> {
     }
 };
 
+struct promise_base {
+    coroutine<> caller_;
+    std::weak_ptr<shared_state> ctb_ptr_;
+};
+
 template<typename T>
 class task {
   public:
-    class promise_type {
+    class promise_type : promise_base {
       public:
         using result_type = T;
         promise_type& get_return_object() noexcept { return *this; }
@@ -331,7 +336,6 @@ class task {
         std::exception_ptr eptr_ = nullptr;
         result_type result_{};
 #endif
-        coroutine<> caller_;
     };
     bool await_ready() noexcept { return is_done_or_empty(); }
 
@@ -347,6 +351,13 @@ class task {
     }
     void await_suspend(coroutine<> caller_coro) noexcept {
         coro_.promise().set_caller(caller_coro);
+        // trick for lifetime control
+        auto p = static_cast<coroutine<promise_base>*>(&caller_coro)->promise();
+        auto caller_ctb_ = p.ctb_ptr_.lock();
+        if (caller_ctb_) {
+            ctb_->next_ = caller_ctb_;
+            ctb_->set_release_by_task(caller_ctb_->is_release_by_task());
+        }
     }
 
     explicit task(promise_type& prom) noexcept
@@ -557,6 +568,9 @@ class task {
     }
 #pragma endregion
 };
+
+template<typename F, typename R, typename... Args>
+auto make_task(F&& f, Args&&... args) {}
 }
 
 #pragma region task helpers
