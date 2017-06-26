@@ -74,8 +74,7 @@ int main() {
     {
         awaitable_tasks::promise_handle<int> old_task_handle;
         auto old_task = old_task_handle.get_task();
-        old_task_handle.cancel_self_release();
-        { auto new_task = old_task.then(func); }
+        { old_task = old_task.then(func); }
         old_task_handle.resume();  // callback and destroy coro
     }
 

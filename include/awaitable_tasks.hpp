@@ -114,38 +114,15 @@ struct CallArgsWith {
 
 struct shared_state : public coroutine<> {
     shared_state(coroutine<> coro) { *static_cast<coroutine<>*>(this) = coro; }
-
-    bool is_release_by_task() { return release_by_task_; }
-    void set_release_by_task(bool b) {
-        release_by_task_ = b;
-        if (next_)
-            next_->set_release_by_task(b);
-    }
-    template<typename>
-    friend class task;
     ~shared_state() = default;
 
     bool valid() { return address() != nullptr; }
     void destroy_state() {
-        if (valid())
+        if (valid()) {
             destroy();
-        *static_cast<coroutine<>*>(this) = nullptr;
-    }
-    void destroy_state_chain() { recursive_destroy(this); }
-
-  protected:
-    static void recursive_destroy(shared_state* target) {
-        if (target) {
-            if (target->next_)
-                recursive_destroy(target->next_.get());
-            if (!target->is_release_by_task())
-                target->destroy_state();
+            *static_cast<coroutine<>*>(this) = nullptr;
         }
     }
-
-  protected:
-    std::shared_ptr<shared_state> next_;
-    bool release_by_task_ = true;
 };
 
 template<typename T = void>
@@ -186,16 +163,8 @@ class promise_handle<void> {
 
     bool is_valid() noexcept { return ctb_ && ctb_->valid(); }
     bool is_done() noexcept { return ctb_ && ctb_->done(); }
-    void cancel_self_release() {
-        if (ctb_)
-            ctb_->set_release_by_task(false);
-    }
 
-    ~promise_handle() {
-        if (is_valid() && !ctb_->is_release_by_task()) {
-            ctb_->destroy_state_chain();
-        }
-    }
+    ~promise_handle() {}
 
   protected:
     std::shared_ptr<shared_state> ctb_;
@@ -244,7 +213,6 @@ class promise_handle : public promise_handle<> {
 
 struct promise_base {
     coroutine<> caller_;
-    std::weak_ptr<shared_state> ctb_ptr_;
 };
 
 template<typename T>
@@ -351,13 +319,6 @@ class task {
     }
     void await_suspend(coroutine<> caller_coro) noexcept {
         coro_.promise().set_caller(caller_coro);
-        // trick for lifetime control
-        auto p = static_cast<coroutine<promise_base>*>(&caller_coro)->promise();
-        auto caller_ctb_ = p.ctb_ptr_.lock();
-        if (caller_ctb_) {
-            ctb_->next_ = caller_ctb_;
-            ctb_->set_release_by_task(caller_ctb_->is_release_by_task());
-        }
     }
 
     explicit task(promise_type& prom) noexcept
@@ -390,7 +351,7 @@ class task {
     }
 
     ~task() noexcept {
-        if (ctb_ && ctb_->is_release_by_task())
+        if (ctb_)
             reset();
     }
 
@@ -455,14 +416,11 @@ class task {
     template<typename F, typename R, typename... Args>
     std::enable_if_t<sizeof...(Args) == 1 && R::TaskOrRet::value, typename R::TaskReturn>
     then_impl(F&& func, detail::callable_traits<F(Args...)>) noexcept {
-        auto callee_ctb = ctb_;
         auto next_task = [](task t, std::decay_t<F> f) -> typename R::TaskReturn {
             auto&& value = co_await t;
             return co_await f(value);
         }
         (std::move(*this), std::move(func));
-        next_task.ctb_->set_release_by_task(callee_ctb->is_release_by_task());
-        callee_ctb->next_ = next_task.ctb_;
         return std::move(next_task);
     }
 
@@ -472,14 +430,11 @@ class task {
                              std::is_same_v<typename R::OrignalRet, void>),
             task>
     then_impl(F&& func, detail::callable_traits<F(Args...)>) noexcept {
-        auto callee_ctb = ctb_;
         auto next_task = [](task t, std::decay_t<F> f) -> task {
             auto&& value = co_await t;
             return co_await f();
             return value;
         }(std::move(*this), std::move(func));
-        next_task.ctb_->set_release_by_task(callee_ctb->is_release_by_task());
-        callee_ctb->next_ = next_task.ctb_;
         return std::move(next_task);
     }
 
@@ -489,7 +444,6 @@ class task {
                              !std::is_same_v<typename R::OrignalRet, void>),
             typename R::TaskReturn>
     then_impl(F&& func, detail::callable_traits<F(Args...)>) noexcept {
-        auto callee_ctb = ctb_;
         auto next_task = [](task t, std::decay_t<F> f) -> typename R::TaskReturn {
             co_await t;
             auto ff = f();
@@ -497,8 +451,6 @@ class task {
             return value;
         }
         (std::move(*this), std::move(func));
-        next_task.ctb_->set_release_by_task(callee_ctb->is_release_by_task());
-        callee_ctb->next_ = next_task.ctb_;
         return std::move(next_task);
     }
 
@@ -507,14 +459,11 @@ class task {
                          std::is_same_v<typename R::OrignalRet, void>,
             task>
     then_impl(F&& func, detail::callable_traits<F(Args...)>) noexcept {
-        auto callee_ctb = ctb_;
         auto next_task = [](task t, std::decay_t<F> f) -> task {
             auto&& value = co_await t;
             f(value);
             return value;
         }(std::move(*this), std::forward<F>(func));
-        next_task.ctb_->set_release_by_task(callee_ctb->is_release_by_task());
-        callee_ctb->next_ = next_task.ctb_;
         return std::move(next_task);
     }
 
@@ -523,14 +472,11 @@ class task {
                          !std::is_same_v<typename R::OrignalRet, void>,
             typename R::TaskReturn>
     then_impl(F&& func, detail::callable_traits<F(Args...)>) noexcept {
-        auto callee_ctb = ctb_;
         auto next_task = [](task t, std::decay_t<F> f) -> typename R::TaskReturn {
             auto&& value = co_await t;
             return f(value);
         }
         (std::move(*this), std::forward<F>(func));
-        next_task.ctb_->set_release_by_task(callee_ctb->is_release_by_task());
-        callee_ctb->next_ = next_task.ctb_;
         return std::move(next_task);
     }
 
@@ -539,15 +485,12 @@ class task {
                          std::is_same_v<typename R::OrignalRet, void>,
             task>
     then_impl(F&& func, detail::callable_traits<F(Args...)>) noexcept {
-        auto callee_ctb = ctb_;
         auto next_task = [](task t, std::decay_t<F> f) -> typename task {
             auto&& value = co_await t;
             f();
             return value;
         }
         (std::move(*this), std::forward<F>(func));
-        next_task.ctb_->set_release_by_task(callee_ctb->is_release_by_task());
-        callee_ctb->next_ = next_task.ctb_;
         return std::move(next_task);
     }
 
@@ -556,14 +499,11 @@ class task {
                          !std::is_same_v<typename R::OrignalRet, void>,
             typename R::TaskReturn>
     then_impl(F&& func, detail::callable_traits<F(Args...)>) noexcept {
-        auto callee_ctb = ctb_;
         auto next_task = [](task t, std::decay_t<F> f) -> typename R::TaskReturn {
             co_await t;
             return f();
         }
         (std::move(*this), std::forward<F>(func));
-        next_task.ctb_->set_release_by_task(callee_ctb->is_release_by_task());
-        callee_ctb->next_ = next_task.ctb_;
         return std::move(next_task);
     }
 #pragma endregion
