@@ -2,11 +2,12 @@
 #include <experimental/resumable>
 #include <memory>
 
-#if 0  // defined(_DEBUG)
+#if defined(_DEBUG)
 #define AWAITABLE_TASKS_TRACE(fmt, ...) printf("\n" fmt "\n", ##__VA_ARGS__)
 #else
 #define AWAITABLE_TASKS_TRACE(fmt, ...)
 #endif
+__declspec(selectany) uint32_t promise_count = 0;
 
 #define AWAITABLE_TASKS_CAPTURE_EXCEPTION
 
@@ -215,7 +216,11 @@ class promise_handle : public promise_handle<> {
         coro->promise().set_eptr(std::move(eptr));
         resume();
     }
-
+    void destroy() noexcept {
+        if (is_valid()) {
+            ctb_->destroy_state_chain(ctb_);
+        }
+    }
     auto get_task() {
         _ASSERT(!ctb_);
         auto result = std::static_pointer_cast<T>(result_);
@@ -298,22 +303,6 @@ class task {
         }
 
         auto& get_result() { return result_; }
-// #define AWAIT_TASKS_TRACE_PROMISE
-#ifdef AWAIT_TASKS_TRACE_PROMISE
-        using alloc_of_char_type = std::allocator<char>;
-        void* operator new(size_t size) {
-            alloc_of_char_type al;
-            auto ptr = al.allocate(size);
-            AWAITABLE_TASKS_TRACE("promise created %p", ptr);
-            return ptr;
-        }
-
-        void operator delete(void* ptr, size_t size) noexcept {
-            alloc_of_char_type al;
-            AWAITABLE_TASKS_TRACE("promise destroy %p", ptr);
-            return al.deallocate(static_cast<char*>(ptr), size);
-        }
-#endif
 #if defined(AWAITABLE_TASKS_VARIANT_MAPBOX) || defined(AWAITABLE_TASKS_VARIANT_MPARK) || \
     defined(AWAITABLE_TASKS_VARIANT_STD)
         struct monostate {};
@@ -322,6 +311,22 @@ class task {
         std::exception_ptr eptr_ = nullptr;
         result_type result_{};
 #endif
+
+#define AWAIT_TASKS_TRACE_PROMISE
+#ifdef AWAIT_TASKS_TRACE_PROMISE
+        using alloc_of_char_type = std::allocator<char>;
+        void* operator new(size_t size) {
+            alloc_of_char_type al;
+            auto ptr = al.allocate(size);
+            AWAITABLE_TASKS_TRACE("promise created:%p total:%u", ptr, ++promise_count);
+            return ptr;
+        }
+
+        void operator delete(void* ptr, size_t size) noexcept {
+            alloc_of_char_type al;
+            AWAITABLE_TASKS_TRACE("promise destroy:%p total:%u", ptr, --promise_count);
+            return al.deallocate(static_cast<char*>(ptr), size);
+        }
     };
     bool await_ready() noexcept { return is_done_or_empty(); }
 
@@ -377,6 +382,8 @@ class task {
   public:
     bool is_valid() noexcept { return coro_ != nullptr; }
     bool is_done_or_empty() noexcept { return coro_ ? coro_.done() : true; }
+
+
     const T* value_ref() {
         if (coro_) {
 #if defined(AWAITABLE_TASKS_VARIANT_MAPBOX)
@@ -395,6 +402,8 @@ class task {
             return nullptr;
         }
     }
+
+#endif
 
   private:
     template<typename>
@@ -573,6 +582,7 @@ typename Ctx::retrun_type when_all(InputIterator first, InputIterator last) {
                 data.results[idx] = std::move(a);
                 if (--data.task_count == 0) {
                     data.handle.resume();
+                    data.handle.destroy();
                 }
             }
             return detail::Unkown{};
@@ -624,6 +634,7 @@ typename Ctx::retrun_type when_n(InputIterator first, InputIterator last, size_t
                 data.set_result(idx, a);
                 if (--data.task_count == 0) {
                     data.handle.resume();
+                    data.handle.destroy();
                 }
             }
             return detail::Unkown{};
@@ -647,40 +658,39 @@ task<Pair> when_any(InputIterator first, InputIterator last) {
 #include <array>
 namespace awaitable_tasks {
 namespace detail {
-template<bool any, typename... Ts>
-struct when_variadic_context;
-template<typename... Ts>
-struct when_variadic_context<false, Ts...> {
+template<size_t N, typename... Ts>
+struct when_variadic_context {
     using result_type = std::tuple<std::decay_t<typename isTaskOrRet<Ts>::Inner>...>;
     using data_type = result_type;
     using task_type = task<data_type>;
 
-    template<bool any, size_t I, typename T>
+    template<size_t I, typename T>
     inline void set_variadic_result(T& t) {
         if (task_count != 0) {
             std::get<I>(results) = std::move(t);
             if (--task_count == 0) {
                 handle.resume();
+                handle.destroy();
             }
         }
     }
     promise_handle<detail::Unkown> handle;
     data_type results;
-    size_t task_count = sizeof...(Ts);
+    size_t task_count = N;
     std::array<task<Unkown>, sizeof...(Ts)> tasks_holder;
 };
 
 template<typename T, typename F>
-inline decltype(auto) task_transform(T& t, F&& f) {
+inline auto task_transform(T& t, F&& f) {
     return t.then(std::move(f));
 }
 
-template<bool any, size_t... Is, typename... Ts, typename Ctx = when_variadic_context<any, Ts...>>
+template<size_t N, size_t... Is, typename... Ts, typename Ctx = when_variadic_context<N, Ts...>>
 typename Ctx::task_type when_variant_impl(std::index_sequence<Is...>, Ts&... ts) {
     auto ctx = std::make_shared<Ctx>();
     ctx->tasks_holder = {
         task_transform(ts, [ctx](typename detail::isTaskOrRet<Ts>::Inner a) -> Unkown {
-            ctx->set_variadic_result<any, Is>(a);
+            ctx->set_variadic_result<Is>(a);
             return Unkown{};
         })...};
     return ctx->handle.get_task().then([ctx] { return std::move(ctx->results); });
@@ -688,10 +698,9 @@ typename Ctx::task_type when_variant_impl(std::index_sequence<Is...>, Ts&... ts)
 }
 
 template<typename T, typename... Ts>
-decltype(auto) when_all(task<T>& t, Ts&... ts) {
-    return detail::when_variant_impl<false>(std::make_index_sequence<sizeof...(Ts) + 1>{},
-                                            t,
-                                            ts...);
+auto when_all(task<T>& t, Ts&... ts) {
+    return detail::when_variant_impl<sizeof...(Ts) +
+                                     1>(std::make_index_sequence<sizeof...(Ts) + 1>{}, t, ts...);
 }
 #if defined(AWAITABLE_TASKS_VARIANT_MAPBOX) || defined(AWAITABLE_TASKS_VARIANT_MPARK) || \
     defined(AWAITABLE_TASKS_VARIANT_STD)
@@ -707,6 +716,7 @@ struct when_variadic_context<true, Ts...> {
         if (task_count != 0) {
             results = std::move(t);
             handle.resume();
+            handle.destroy();
         }
     }
     promise_handle<detail::Unkown> handle;
@@ -716,8 +726,8 @@ struct when_variadic_context<true, Ts...> {
 };
 }
 template<typename T, typename... Ts>
-decltype(auto) when_any(task<T>& t, Ts&... ts) {
-    return detail::when_variant_impl<true>(std::make_index_sequence<sizeof...(Ts) + 1>{}, t, ts...);
+auto when_any(task<T>& t, Ts&... ts) {
+    return detail::when_variant_impl<1>(std::make_index_sequence<sizeof...(Ts) + 1>{}, t, ts...);
 }
 #endif
 }
