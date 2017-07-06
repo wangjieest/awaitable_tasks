@@ -55,8 +55,6 @@ void test_capture() {
 }
 
 int main() {
-    test_capture();
-
     using fn = int (*)();
     fn func = []() -> int {
         std::cout << ++g_data << " in func " << std::endl;
@@ -70,19 +68,16 @@ int main() {
         std::cout << ++g_data << " in func2 " << std::endl;
         return g_data;
     };
-
     {
         awaitable_tasks::promise_handle<int> old_task_handle;
-        auto old_task = old_task_handle.get_task();
-        { old_task = old_task.then(func); }
-        old_task_handle.resume();  // callback and destroy coro
-    }
-
-    {
-        awaitable_tasks::promise_handle<int> old_task_handle;
-        auto old_task = old_task_handle.get_task();
-        { auto new_task = old_task.then(func); }
+        auto new_task = old_task_handle.get_task().then(func);
+        new_task.reset();
         old_task_handle.resume();  // do nothing
+    }
+    {
+        awaitable_tasks::promise_handle<int> old_task_handle;
+        old_task_handle.get_task().then(func);
+        old_task_handle.resume();
     }
 
     // for C interface

@@ -2,7 +2,7 @@
 #include <experimental/resumable>
 #include <memory>
 
-#if 0
+#if 0  // defined(_DEBUG)
 #define AWAITABLE_TASKS_TRACE(fmt, ...) printf("\n" fmt "\n", ##__VA_ARGS__)
 #else
 #define AWAITABLE_TASKS_TRACE(fmt, ...)
@@ -111,18 +111,34 @@ struct CallArgsWith {
     using OrignalRet = typename CallableInfo::result_type;
 };
 }
-
 struct shared_state : public coroutine<> {
     shared_state(coroutine<> coro) { *static_cast<coroutine<>*>(this) = coro; }
+    template<typename>
+    friend class task;
     ~shared_state() = default;
-
     bool valid() { return address() != nullptr; }
-    void destroy_state() {
+    void destroy_coro() {
         if (valid()) {
             destroy();
             *static_cast<coroutine<>*>(this) = nullptr;
         }
     }
+    static void destroy_state_chain(std::shared_ptr<shared_state>& target) {
+        recursive_destroy(target);
+    }
+
+  protected:
+    static void recursive_destroy(std::shared_ptr<shared_state>& target) {
+        if (target) {
+            if (target->next_)
+                recursive_destroy(target->next_);
+            if (target->valid() && (target->done() || target.use_count() == 1)) {
+                target->destroy();
+                *static_cast<coroutine<>*>(target.get()) = nullptr;
+            }
+        }
+    }
+    std::shared_ptr<shared_state> next_;
 };
 
 template<typename T = void>
@@ -153,18 +169,21 @@ class promise_handle<void> {
     }
 
     bool resume() {
-        if (is_valid() && !is_done()) {
+        if (is_resumable()) {
             ctb_->resume();
             return true;
         }
         return false;
     }
     void operator()() { resume(); }
-
+    bool is_resumable() noexcept { return is_valid() && ctb_.use_count() >= 2 && !ctb_->done(); }
     bool is_valid() noexcept { return ctb_ && ctb_->valid(); }
-    bool is_done() noexcept { return ctb_ && ctb_->done(); }
 
-    ~promise_handle() {}
+    ~promise_handle() {
+        if (is_valid()) {
+            ctb_->destroy_state_chain(ctb_);
+        }
+    }
 
   protected:
     std::shared_ptr<shared_state> ctb_;
@@ -187,12 +206,10 @@ class promise_handle : public promise_handle<> {
 
     template<typename U>
     void set_value(U&& value) {
-        _ASSERT(!is_done());
         *reinterpret_cast<T*>(result_.get()) = std::forward<U>(value);
         resume();
     }
     void set_exception(std::exception_ptr eptr) {
-        _ASSERT(!is_done());
         auto coro =
             static_cast<coroutine<task<T>::promise_type>*>(static_cast<coroutine<>*>(ctb_.get()));
         coro->promise().set_eptr(std::move(eptr));
@@ -213,12 +230,13 @@ class promise_handle : public promise_handle<> {
 
 struct promise_base {
     coroutine<> caller_;
+    std::weak_ptr<shared_state> ctb_ptr_;
 };
 
 template<typename T>
 class task {
   public:
-    class promise_type : promise_base {
+    class promise_type : public promise_base {
       public:
         using result_type = T;
         promise_type& get_return_object() noexcept { return *this; }
@@ -317,13 +335,17 @@ class task {
         return std::move(coro_.promise().get_result());
 #endif
     }
-    void await_suspend(coroutine<> caller_coro) noexcept {
+
+    template<typename P>
+    void await_suspend(coroutine<P> caller_coro) noexcept {
+        this->ctb_->next_ = caller_coro.promise().ctb_ptr_.lock();
         coro_.promise().set_caller(caller_coro);
     }
 
     explicit task(promise_type& prom) noexcept
         : coro_(coroutine<promise_type>::from_promise(prom)) {
         ctb_ = std::make_shared<shared_state>(coro_);
+        coro_.promise().ctb_ptr_ = ctb_;
     }
 
     task() = default;
@@ -345,17 +367,15 @@ class task {
 
     void reset() noexcept {
         if (coro_) {
-            ctb_->destroy_state();
+            ctb_->destroy_coro();
             coro_ = nullptr;
         }
     }
 
-    ~task() noexcept {
-        if (ctb_)
-            reset();
-    }
+    ~task() noexcept {}
 
   public:
+    bool is_valid() noexcept { return coro_ != nullptr; }
     bool is_done_or_empty() noexcept { return coro_ ? coro_.done() : true; }
     const T* value_ref() {
         if (coro_) {
@@ -508,11 +528,7 @@ class task {
     }
 #pragma endregion
 };
-
-template<typename F, typename R, typename... Args>
-auto make_task(F&& f, Args&&... args) {}
 }
-
 #pragma region task helpers
 
 // when_all range
