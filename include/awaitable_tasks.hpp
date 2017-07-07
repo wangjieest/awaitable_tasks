@@ -25,11 +25,11 @@
 #endif
 namespace awaitable_tasks {
 #if defined(AWAITABLE_TASKS_VARIANT_MAPBOX)
-namespace ns_variant = mapbox::util;
+#define NS_VARIANT mapbox::util
 #elif defined(AWAITABLE_TASKS_VARIANT_STD)
-namespace ns_variant = std;
+#define NS_VARIANT std
 #elif defined(AWAITABLE_TASKS_VARIANT_MPARK)
-namespace ns_variant = mpark;
+#define NS_VARIANT mpark
 #endif
 template<typename T = void>
 using coroutine = std::experimental::coroutine_handle<T>;
@@ -124,16 +124,16 @@ struct node_link_t {
         _prev = target;
         _next = target->_next;
         if (_next)
-            _next->_prev = (T*)this;
-        target->_next = (T*)this;
+            _next->_prev = static_cast<T*>(this);
+        target->_next = static_cast<T*>(this);
     }
     void insert_before(T* target) {
         assert(!_prev);
         _next = target;
         _prev = target->_prev;
         if (_prev)
-            _prev->_next = (T*)this;
-        target->_prev = (T*)this;
+            _prev->_next = static_cast<T*>(this);
+        target->_prev = static_cast<T*>(this);
     }
 
     T* prev() { return _prev; }
@@ -283,8 +283,7 @@ class task {
         void uncought_exceptions() { set_eptr(std::current_exception()); }
         void set_exception(std::exception_ptr eptr) noexcept { set_eptr(std::move(eptr)); }
 #endif
-#if defined(AWAITABLE_TASKS_VARIANT_MAPBOX) || defined(AWAITABLE_TASKS_VARIANT_MPARK) || \
-    defined(AWAITABLE_TASKS_VARIANT_STD)
+#if defined(NS_VARIANT)
         void set_eptr(std::exception_ptr eptr) noexcept { result_ = std::move(eptr); }
 #else
         void set_eptr(std::exception_ptr eptr) noexcept { eptr_ = std::move(eptr); }
@@ -305,9 +304,9 @@ class task {
             else if (result_.which() != result_.which<result_type>())
                 throw std::runtime_error("value not returned");
 #elif defined(AWAITABLE_TASKS_VARIANT_MPARK) || defined(AWAITABLE_TASKS_VARIANT_STD)
-            if (ns_variant::get_if<std::exception_ptr>(&result_))
-                std::rethrow_exception(ns_variant::get<std::exception_ptr>(result_));
-            else if (ns_variant::get_if<monostate>(&result_))
+            if (NS_VARIANT::get_if<std::exception_ptr>(&result_))
+                std::rethrow_exception(NS_VARIANT::get<std::exception_ptr>(result_));
+            else if (NS_VARIANT::get_if<monostate>(&result_))
                 throw std::runtime_error("value not returned");
 #else
             if (eptr_)
@@ -316,10 +315,9 @@ class task {
         }
 
         auto& get_result() { return result_; }
-#if defined(AWAITABLE_TASKS_VARIANT_MAPBOX) || defined(AWAITABLE_TASKS_VARIANT_MPARK) || \
-    defined(AWAITABLE_TASKS_VARIANT_STD)
+#if defined(NS_VARIANT)
         struct monostate {};
-        ns_variant::variant<monostate, result_type, std::exception_ptr> result_;
+        NS_VARIANT::variant<monostate, result_type, std::exception_ptr> result_;
 #else
         std::exception_ptr eptr_ = nullptr;
         result_type result_{};
@@ -337,7 +335,7 @@ class task {
 #if defined(AWAITABLE_TASKS_VARIANT_MAPBOX)
         return std::move(coro_.promise().get_result().get<T>());
 #elif defined(AWAITABLE_TASKS_VARIANT_MPARK) || defined(AWAITABLE_TASKS_VARIANT_STD)
-        return std::move(ns_variant::get<T>(coro_.promise().get_result()));
+        return std::move(NS_VARIANT::get<T>(coro_.promise().get_result()));
 #else
         return std::move(coro_.promise().get_result());
 #endif
@@ -541,8 +539,8 @@ class task_holder {
     std::unique_ptr<promise_base> _coro_base;
 };
 }
-#pragma region task helpers
 
+#pragma region task helpers
 // when_all range
 #include <vector>
 namespace awaitable_tasks {
@@ -634,9 +632,8 @@ typename Ctx::retrun_type when_n(InputIterator first, InputIterator last, size_t
             auto& data = *ctx;
             if (data.task_count != 0) {
                 data.set_result(idx, a);
-                if (--data.task_count == 0) {
+                if (--data.task_count == 0)
                     data.handle.resume();
-                }
             }
             return detail::Unkown{};
         }));
@@ -659,7 +656,7 @@ task<Pair> when_any(InputIterator first, InputIterator last) {
 #include <array>
 namespace awaitable_tasks {
 namespace detail {
-template<size_t N, typename... Ts>
+template<typename... Ts>
 struct when_variadic_context {
     using result_type = std::tuple<std::decay_t<typename isTaskOrRet<Ts>::Inner>...>;
     using data_type = result_type;
@@ -669,25 +666,23 @@ struct when_variadic_context {
     inline void set_variadic_result(T& t) {
         if (task_count != 0) {
             std::get<I>(results) = std::move(t);
-            if (--task_count == 0) {
+            if (--task_count == 0)
                 handle.resume();
-            }
         }
     }
     promise_handle<detail::Unkown> handle;
     data_type results;
-    size_t task_count = N;
+    size_t task_count = sizeof...(Ts);
     std::array<task<Unkown>, sizeof...(Ts)> tasks_holder;
 };
-
 template<typename T, typename F>
 inline auto task_transform(T& t, F&& f) {
     return t.then(std::move(f));
 }
-
-template<size_t N, size_t... Is, typename... Ts, typename Ctx = when_variadic_context<N, Ts...>>
-typename Ctx::task_type when_variant_impl(std::index_sequence<Is...>, Ts&... ts) {
+template<size_t... Is, typename... Ts, typename Ctx = when_variadic_context<Ts...>>
+typename Ctx::task_type when_variant_impl(size_t N, std::index_sequence<Is...>, Ts&... ts) {
     auto ctx = std::make_shared<Ctx>();
+    ctx->task_count = N < sizeof...(Ts) ? (N > 0 ? N : 1) : sizeof...(Ts);
     ctx->tasks_holder = {
         task_transform(ts, [ctx](typename detail::isTaskOrRet<Ts>::Inner a) -> Unkown {
             ctx->set_variadic_result<Is>(a);
@@ -699,34 +694,19 @@ typename Ctx::task_type when_variant_impl(std::index_sequence<Is...>, Ts&... ts)
 
 template<typename T, typename... Ts>
 auto when_all(task<T>& t, Ts&... ts) {
-    return detail::when_variant_impl<sizeof...(Ts) +
-                                     1>(std::make_index_sequence<sizeof...(Ts) + 1>{}, t, ts...);
+    return detail::when_variant_impl(sizeof...(Ts) + 1,
+                    std::make_index_sequence<sizeof...(Ts) + 1>{},
+                    t,
+                    ts...);
 }
-#if defined(AWAITABLE_TASKS_VARIANT_MAPBOX) || defined(AWAITABLE_TASKS_VARIANT_MPARK) || \
-    defined(AWAITABLE_TASKS_VARIANT_STD)
-namespace detail {
-template<typename... Ts>
-struct when_variadic_context<true, Ts...> {
-    using result_type = ns_variant::variant<std::decay_t<typename isTaskOrRet<Ts>::Inner>...>;
-    using data_type = result_type;
-    using task_type = task<data_type>;
-
-    template<bool any, size_t I, typename T>
-    inline void set_variadic_result(T& t) {
-        if (task_count != 0) {
-            results = std::move(t);
-            handle.resume();
-        }
-    }
-    promise_handle<detail::Unkown> handle;
-    data_type results;
-    size_t task_count = sizeof...(Ts);
-    std::array<task<Unkown>, sizeof...(Ts)> tasks_holder;
-};
-}
+#if defined(NS_VARIANT)
 template<typename T, typename... Ts>
 auto when_any(task<T>& t, Ts&... ts) {
-    return detail::when_variant_impl<1>(std::make_index_sequence<sizeof...(Ts) + 1>{}, t, ts...);
+    return detail::when_variant_impl(1, std::make_index_sequence<sizeof...(Ts) + 1>{}, t, ts...);
+}
+template<typename T, typename... Ts>
+auto when_n(size_t N, task<T>& t, Ts&... ts) {
+    return detail::when_variant_impl(N, std::make_index_sequence<sizeof...(Ts) + 1>{}, t, ts...);
 }
 #endif
 }
