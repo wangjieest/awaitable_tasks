@@ -185,7 +185,7 @@ class promise_handler<void> {
     std::shared_ptr<promise_type> promise_handle_;
 };
 
-#ifdef AWAITABLE_TASKS_CAPTURE_EXCEPTION
+#if 1
 // promise has set_exception will handle exception self.
 #else
 // Ensure any exceptions thrown from the handler are propagated back to the

@@ -1,18 +1,15 @@
-#pragma once
+﻿#pragma once
 #include <experimental/resumable>
 #include <memory>
 
-#if defined(_DEBUG)
+#if 0
 #define AWAITABLE_TASKS_TRACE(fmt, ...) printf("\n" fmt "\n", ##__VA_ARGS__)
 #else
 #define AWAITABLE_TASKS_TRACE(fmt, ...)
 #endif
 __declspec(selectany) uint32_t promise_count = 0;
 
-#define AWAITABLE_TASKS_CAPTURE_EXCEPTION
-
 #define AWAITABLE_TASKS_VARIANT_MPARK
-
 #if defined(AWAITABLE_TASKS_VARIANT_MAPBOX)
 #include "mapbox/variant.hpp"
 #elif defined(AWAITABLE_TASKS_VARIANT_MPARK)
@@ -111,35 +108,55 @@ struct CallArgsWith {
     using TaskReturn = task<typename TaskOrRet::Inner>;
     using OrignalRet = typename CallableInfo::result_type;
 };
-}
-struct shared_state : public coroutine<> {
-    shared_state(coroutine<> coro) { *static_cast<coroutine<>*>(this) = coro; }
-    template<typename>
-    friend class task;
-    ~shared_state() = default;
-    bool valid() { return address() != nullptr; }
-    void destroy_coro() {
-        if (valid()) {
-            destroy();
-            *static_cast<coroutine<>*>(this) = nullptr;
-        }
-    }
-    static void destroy_state_chain(std::shared_ptr<shared_state>& target) {
-        recursive_destroy(target);
-    }
+template<typename T>
+struct node_link_t {
+    T* _outer = nullptr;
+    T* _inner = nullptr;
 
-  protected:
-    static void recursive_destroy(std::shared_ptr<shared_state>& target) {
+    void remove_from_list() {
+        if (_outer)
+            _outer->_inner = _inner;
+        if (_inner)
+            _inner->_outer = _outer;
+        _outer = nullptr;
+        _inner = nullptr;
+    }
+    void insert_after(T* target) {
+        _outer = target;
+        _inner = target->_inner;
+        if (_inner)
+            _inner->_outer = (T*)this;
+        target->_inner = (T*)this;
+    }
+    void insert_before(T* target) {
+        _inner = target;
+        _outer = target->_outer;
+        if (_outer)
+            _outer->_inner = (T*)this;
+        target->_outer = (T*)this;
+    }
+};
+}
+
+struct promise_base : detail::node_link_t<promise_base> {
+    coroutine<> _coro = nullptr;
+    static bool is_valid(promise_base* coro_base) noexcept {
+        return coro_base && coro_base->_coro && coro_base->_coro;
+    }
+    static bool is_resumable(promise_base* coro_base) noexcept {
+        return is_valid(coro_base) && !coro_base->_coro.done();
+    }
+    static void destroy_chain(promise_base* target, bool force) {
         if (target) {
-            if (target->next_)
-                recursive_destroy(target->next_);
-            if (target->valid() && (target->done() || target.use_count() == 1)) {
-                target->destroy();
-                *static_cast<coroutine<>*>(target.get()) = nullptr;
+            auto outer = target->_outer;
+            auto coro = target->_coro;
+            if (coro && (force || coro.done())) {
+                target->remove_from_list();
+                coro.destroy();
+                destroy_chain(outer, force);
             }
         }
     }
-    std::shared_ptr<shared_state> next_;
 };
 
 template<typename T = void>
@@ -150,64 +167,76 @@ class promise_handle<void> {
   public:
     promise_handle() = default;
     template<typename V>
-    promise_handle(const promise_handle<V>& rhs) noexcept {
-        ctb_ = rhs.ctb_;
-    }
+    promise_handle(const promise_handle<V>& rhs) = delete;
     template<typename V>
-    promise_handle& operator=(const promise_handle<V>& rhs) noexcept {
-        ctb_ = rhs.ctb_;
-    }
+    promise_handle& operator=(const promise_handle<V>& rhs) = delete;
     template<typename V>
     promise_handle(promise_handle<V>&& rhs) noexcept {
-        std::swap(ctb_, rhs.ctb_);
+        _coro_base = rhs._coro_base;
+        rhs._coro_base = nullptr;
+        _result = std::move(rhs._result);
+        return *this;
     }
     template<typename V>
     promise_handle& operator=(promise_handle<V>&& rhs) noexcept {
-        if (this != &rhs) {
-            std::swap(ctb_, rhs.ctb_);
+        if (this != std::addressof(rhs)) {
+            _coro_base = rhs._coro_base;
+            rhs._coro_base = nullptr;
+            _result = std::move(rhs._result);
         }
         return *this;
     }
 
     bool resume() {
-        if (is_resumable()) {
-            ctb_->resume();
+        if (promise_base::is_resumable(_coro_base->_outer)) {
+            _coro_base->_outer->_coro.resume();
+            destroy();
             return true;
         }
         return false;
     }
     void operator()() { resume(); }
-    bool is_resumable() noexcept { return is_valid() && ctb_.use_count() >= 2 && !ctb_->done(); }
-    bool is_valid() noexcept { return ctb_ && ctb_->valid(); }
 
-    ~promise_handle() {
-        if (is_valid()) {
-            ctb_->destroy_state_chain(ctb_);
+    void destroy() noexcept {
+        if (_coro_base) {
+            promise_base::destroy_chain(_coro_base->_outer, false);
+            _coro_base.reset();
         }
     }
+    ~promise_handle() noexcept { destroy(); }
 
   protected:
-    std::shared_ptr<shared_state> ctb_;
-    std::shared_ptr<void> result_;
+    std::shared_ptr<promise_base> _coro_base;
+    std::shared_ptr<void> _result;
 };
 
 template<typename T>
 class promise_handle : public promise_handle<> {
   public:
-    promise_handle() { result_ = std::make_shared<T>(); };
+    promise_handle() {
+        _coro_base = std::make_shared<promise_base>();
+        _result = std::make_shared<T>();
+    };
     ~promise_handle() = default;
-    promise_handle(const promise_handle& rhs) noexcept { ctb_ = rhs.ctb_; }
-    promise_handle& operator=(const promise_handle& rhs) noexcept { ctb_ = rhs.ctb_; }
-    promise_handle(promise_handle&& rhs) noexcept { ctb_ = std::move(rhs.ctb_); }
+    promise_handle(const promise_handle& rhs) = delete;
+    promise_handle& operator=(const promise_handle& rhs) = delete;
+    promise_handle(promise_handle&& rhs) noexcept {
+        _coro_base = rhs._coro_base;
+        rhs._coro_base = nullptr;
+        _result = std::move(rhs._result);
+    }
     promise_handle& operator=(promise_handle&& rhs) noexcept {
-        if (this != &rhs)
-            ctb_ = std::move(rhs.ctb_);
+        if (this != std::addressof(rhs)) {
+            _coro_base = rhs._coro_base;
+            rhs._coro_base = nullptr;
+            _result = std::move(rhs._result);
+        }
         return *this;
     }
 
     template<typename U>
     void set_value(U&& value) {
-        *reinterpret_cast<T*>(result_.get()) = std::forward<U>(value);
+        *reinterpret_cast<T*>(_result.get()) = std::forward<U>(value);
         resume();
     }
     void set_exception(std::exception_ptr eptr) {
@@ -216,26 +245,16 @@ class promise_handle : public promise_handle<> {
         coro->promise().set_eptr(std::move(eptr));
         resume();
     }
-    void destroy() noexcept {
-        if (is_valid()) {
-            ctb_->destroy_state_chain(ctb_);
-        }
-    }
+
     auto get_task() {
-        _ASSERT(!ctb_);
-        auto result = std::static_pointer_cast<T>(result_);
+        auto result = std::static_pointer_cast<T>(_result);
         auto t = [](std::shared_ptr<T> value) -> task<T> {
             co_await ex::suspend_always{};
             return *(value.get());
         }(std::move(result));
-        ctb_ = t.ctb_;
+        _coro_base->insert_after(&t.coro_.promise());
         return std::move(t);
     }
-};
-
-struct promise_base {
-    coroutine<> caller_;
-    std::weak_ptr<shared_state> ctb_ptr_;
 };
 
 template<typename T>
@@ -255,8 +274,8 @@ class task {
                 }
                 void await_suspend(coroutine<>) noexcept {
                     // if suspend by caller , then resume to it.
-                    if (me->caller_)
-                        me->caller_();
+                    if (me->_outer && me->_outer->_coro)
+                        me->_outer->_coro();
                 }
                 void await_resume() noexcept {}
             };
@@ -268,10 +287,8 @@ class task {
             result_ = std::forward<U>(value);
         }
 
-#ifdef AWAITABLE_TASKS_CAPTURE_EXCEPTION
         void uncought_exceptions() { set_eptr(std::current_exception()); }
         void set_exception(std::exception_ptr eptr) noexcept { set_eptr(std::move(eptr)); }
-#endif
 
 #if defined(AWAITABLE_TASKS_VARIANT_MAPBOX) || defined(AWAITABLE_TASKS_VARIANT_MPARK) || \
     defined(AWAITABLE_TASKS_VARIANT_STD)
@@ -284,7 +301,7 @@ class task {
             result_ = std::move(value);
         }
 
-        void set_caller(coroutine<> caller_coro) noexcept { caller_ = caller_coro; }
+        void set_caller(coroutine<> caller_coro) noexcept { _caller = caller_coro; }
         void throw_if_exception() const {
 #if defined(AWAITABLE_TASKS_VARIANT_MAPBOX)
             if (result_.which() == result_.which<std::exception_ptr>())
@@ -327,9 +344,13 @@ class task {
             AWAITABLE_TASKS_TRACE("promise destroy:%p total:%u", ptr, --promise_count);
             return al.deallocate(static_cast<char*>(ptr), size);
         }
+#endif
     };
     bool await_ready() noexcept { return is_done_or_empty(); }
-
+    template<typename P>
+    void await_suspend(coroutine<P> caller_coro) noexcept {
+        caller_coro.promise().insert_before(&coro_.promise());
+    }
     T await_resume() {
         coro_.promise().throw_if_exception();
 #if defined(AWAITABLE_TASKS_VARIANT_MAPBOX)
@@ -341,77 +362,42 @@ class task {
 #endif
     }
 
-    template<typename P>
-    void await_suspend(coroutine<P> caller_coro) noexcept {
-        this->ctb_->next_ = caller_coro.promise().ctb_ptr_.lock();
-        coro_.promise().set_caller(caller_coro);
-    }
-
     explicit task(promise_type& prom) noexcept
         : coro_(coroutine<promise_type>::from_promise(prom)) {
-        ctb_ = std::make_shared<shared_state>(coro_);
-        coro_.promise().ctb_ptr_ = ctb_;
+        prom._coro = coro_;
     }
 
     task() = default;
     task(task const&) = delete;
     task& operator=(task const&) = delete;
-    task(task&& rhs) noexcept : coro_(rhs.coro_), ctb_(rhs.ctb_) {
-        rhs.coro_ = nullptr;
-        rhs.ctb_ = nullptr;
-    }
+    task(task&& rhs) noexcept : coro_(rhs.coro_) { rhs.coro_ = nullptr; }
     task& operator=(task&& rhs) noexcept {
-        if (&rhs != this) {
+        if (this != std::addressof(rhs)) {
             coro_ = rhs.coro_;
-            ctb_ = rhs.ctb_;
-            rhs.ctb_ = nullptr;
             rhs.coro_ = nullptr;
         }
         return *this;
     }
+    ~task() = default;
 
     void reset() noexcept {
         if (coro_) {
-            ctb_->destroy_coro();
-            coro_ = nullptr;
+            promise_base* inner = &coro_.promise();
+            while (inner->_inner)
+                inner = inner->_inner;
+            promise_base::destroy_chain(inner->_outer, true);
         }
     }
 
-    ~task() noexcept {}
-
-  public:
     bool is_valid() noexcept { return coro_ != nullptr; }
     bool is_done_or_empty() noexcept { return coro_ ? coro_.done() : true; }
-
-
-    const T* value_ref() {
-        if (coro_) {
-#if defined(AWAITABLE_TASKS_VARIANT_MAPBOX)
-            auto& result = coro_.promise().get_result();
-            if (result.which() == result.which<T>())
-                return &result.get<T>();
-            else
-                return nullptr;
-#elif defined(AWAITABLE_TASKS_VARIANT_MPARK) || defined(AWAITABLE_TASKS_VARIANT_STD)
-            auto& result = coro_.promise().get_result();
-            return ns_variant::get_if<T>(&result);
-#else
-            return &coro_.promise().get_result();
-#endif
-        } else {
-            return nullptr;
-        }
-    }
-
-#endif
 
   private:
     template<typename>
     friend class task;
+    friend class task_holder;
     template<typename>
     friend class promise_handle;
-
-    std::shared_ptr<shared_state> ctb_;
     coroutine<promise_type> coro_ = nullptr;
 
 #pragma region then_impl
@@ -537,6 +523,43 @@ class task {
     }
 #pragma endregion
 };
+
+class task_holder {
+  public:
+    task_holder() : _coro_base(std::make_unique<promise_base>()) {}
+    template<typename T>
+    task_holder(task<T>&& t) : _coro_base(std::make_unique<promise_base>()) {
+        if (t.coro_) {
+            _coro_base->insert_before(&t.coro_.promise());
+            t.coro_ = nullptr;
+        }
+    }
+    task_holder(task_holder&& rhs) : _coro_base(std::move(rhs._coro_base)) {}
+    task_holder& operator=(task_holder&& rhs) {
+        if (this != std::addressof(rhs)) {
+            _coro_base.reset();
+            _coro_base.swap(rhs._coro_base);
+        }
+        return *this;
+    }
+    task_holder(const task_holder& rhs) = delete;
+    task_holder& operator=(const task_holder&) = delete;
+    void reset() noexcept {
+        if (_coro_base) {
+            promise_base* inner = _coro_base->_inner;
+            while (inner->_inner)
+                inner = inner->_inner;
+            promise_base::destroy_chain(inner->_outer, true);
+            inner->_outer = nullptr;
+            _coro_base->_inner = nullptr;
+            _coro_base->_outer = nullptr;
+        }
+    }
+    ~task_holder() noexcept { reset(); }
+
+  private:
+    std::unique_ptr<promise_base> _coro_base;
+};
 }
 #pragma region task helpers
 
@@ -582,7 +605,6 @@ typename Ctx::retrun_type when_all(InputIterator first, InputIterator last) {
                 data.results[idx] = std::move(a);
                 if (--data.task_count == 0) {
                     data.handle.resume();
-                    data.handle.destroy();
                 }
             }
             return detail::Unkown{};
@@ -634,7 +656,6 @@ typename Ctx::retrun_type when_n(InputIterator first, InputIterator last, size_t
                 data.set_result(idx, a);
                 if (--data.task_count == 0) {
                     data.handle.resume();
-                    data.handle.destroy();
                 }
             }
             return detail::Unkown{};
@@ -670,7 +691,6 @@ struct when_variadic_context {
             std::get<I>(results) = std::move(t);
             if (--task_count == 0) {
                 handle.resume();
-                handle.destroy();
             }
         }
     }
@@ -716,7 +736,6 @@ struct when_variadic_context<true, Ts...> {
         if (task_count != 0) {
             results = std::move(t);
             handle.resume();
-            handle.destroy();
         }
     }
     promise_handle<detail::Unkown> handle;

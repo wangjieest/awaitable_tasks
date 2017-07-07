@@ -689,21 +689,21 @@ int main(int argc, char* argv[]) {
             path = argv[2];
         }
         if (argc != 3) {
-            //             std::cout << "Usage: async_client <server> <path>\n";
-            //             std::cout << "Example:\n";
-            //             std::cout << "  async_client www.boost.org /LICENSE_1_0.txt\n";
+//             std::cout << "Usage: async_client <server> <path>\n";
+//             std::cout << "Example:\n";
+//             std::cout << "  async_client www.boost.org /LICENSE_1_0.txt\n";
         }
-        //         {
-        //             std::cout << "sync_request\n";
-        //             asio::io_service io_service;
-        //             sync_request(io_service, server, path);
-        //         }
-        //         {
-        //             std::cout << "async_request\n";
-        //             asio::io_service io_service;
-        //             client c(io_service, server, path);
-        //             io_service.run();
-        //         }
+//         {
+//             std::cout << "sync_request\n";
+//             asio::io_service io_service;
+//             sync_request(io_service, server, path);
+//         }
+//         {
+//             std::cout << "async_request\n";
+//             asio::io_service io_service;
+//             client c(io_service, server, path);
+//             io_service.run();
+//         }
         {
             std::cout << "coroutine_request\n";
             asio::io_service io_service;

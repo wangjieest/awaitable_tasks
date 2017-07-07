@@ -5,7 +5,7 @@
 #include <string>
 #include <iostream>
 #include "../include/awaitable_tasks.hpp"
-#pragma warning(disable : 4100 4189)
+#pragma warning(disable : 4100)
 int g_data = 42;
 
 template<typename T>
@@ -50,7 +50,6 @@ void test_capture() {
             co_await awaitable_tasks::ex::suspend_never{};
             return f();
         }(v1, v2, v1);
-        auto v = ttt.value_ref();
     }
 }
 
@@ -72,18 +71,21 @@ int main() {
         std::cout << v << std::endl;
         return v;
     };
-
     {
         awaitable_tasks::promise_handle<int> old_task_handle;
-        old_task_handle.get_task().then(func);
-        old_task_handle.resume();
+        { awaitable_tasks::task_holder new_task = old_task_handle.get_task().then(func); }
+        old_task_handle.resume();  // do nothing
     }
-
     {
         awaitable_tasks::promise_handle<int> old_task_handle;
         auto new_task = old_task_handle.get_task().then(func);
         new_task.reset();
         old_task_handle.resume();  // do nothing
+    }
+    {
+        awaitable_tasks::promise_handle<int> old_task_handle;
+        old_task_handle.get_task().then(func);
+        old_task_handle.resume();
     }
 
     // make_task then and then
@@ -125,7 +127,6 @@ int main() {
                             });
         old_task_handle.resume();
         old_task2_handle.resume();
-        static_task.reset();
     }
 
     // when_all zip
@@ -138,6 +139,19 @@ int main() {
             std::cout << "ok " << std::endl;
         });
         task_a_handle.resume();
+        task_b_handle.resume();
+    }
+    // when_all zip
+    {
+        awaitable_tasks::promise_handle<int> task_a_handle;
+        awaitable_tasks::promise_handle<int> task_b_handle;
+        awaitable_tasks::task<int> task_a = task_a_handle.get_task().then(func);
+        awaitable_tasks::task<int> task_b = task_b_handle.get_task().then(fund);
+        auto new_task = awaitable_tasks::when_all(task_a, task_b).then([](std::tuple<int, int>&) {
+            std::cout << "ok " << std::endl;
+        });
+        task_a_handle.resume();
+        new_task.reset();
         task_b_handle.resume();
     }
     // when_all map
@@ -234,10 +248,12 @@ int main() {
         auto new_task = awaitable_tasks::when_any(tasks.begin(), tasks.end())
                             .then([](std::pair<size_t, int>& xx)
                                       -> awaitable_tasks::task<std::pair<size_t, int>> {
+                                // will leak, do not use without promise_handle cotrol
                                 co_await awaitable_tasks::ex::suspend_never{};
                                 std::cout << "ok " << std::endl;
                                 return xx;
-                            });
+                            })
+                            .then([](std::pair<size_t, int>& t) {});
         task_handle_a.resume();
         task_handle_b.resume();
         task_handle_c.resume();
