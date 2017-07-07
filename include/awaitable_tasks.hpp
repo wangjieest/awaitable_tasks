@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include <experimental/resumable>
 #include <memory>
+#include <cassert>
 
 #if 0
 #define AWAITABLE_TASKS_TRACE(fmt, ...) printf("\n" fmt "\n", ##__VA_ARGS__)
@@ -110,30 +111,38 @@ struct CallArgsWith {
 };
 template<typename T>
 struct node_link_t {
-    T* _outer = nullptr;
-    T* _inner = nullptr;
+    T* _prev = nullptr;
+    T* _next = nullptr;
 
     void remove_from_list() {
-        if (_outer)
-            _outer->_inner = _inner;
-        if (_inner)
-            _inner->_outer = _outer;
-        _outer = nullptr;
-        _inner = nullptr;
+        if (_prev)
+            _prev->_next = _next;
+        if (_next)
+            _next->_prev = _prev;
+        reset();
     }
     void insert_after(T* target) {
-        _outer = target;
-        _inner = target->_inner;
-        if (_inner)
-            _inner->_outer = (T*)this;
-        target->_inner = (T*)this;
+        assert(!_next);
+        _prev = target;
+        _next = target->_next;
+        if (_next)
+            _next->_prev = (T*)this;
+        target->_next = (T*)this;
     }
     void insert_before(T* target) {
-        _inner = target;
-        _outer = target->_outer;
-        if (_outer)
-            _outer->_inner = (T*)this;
-        target->_outer = (T*)this;
+        assert(!_prev);
+        _next = target;
+        _prev = target->_prev;
+        if (_prev)
+            _prev->_next = (T*)this;
+        target->_prev = (T*)this;
+    }
+
+    T* prev() { return _prev; }
+    T* next() { return _next; }
+    void reset() {
+        _prev = nullptr;
+        _next = nullptr;
     }
 };
 }
@@ -148,7 +157,7 @@ struct promise_base : detail::node_link_t<promise_base> {
     }
     static void destroy_chain(promise_base* target, bool force) {
         if (target) {
-            auto outer = target->_outer;
+            auto outer = target->prev();
             auto coro = target->_coro;
             if (coro && (force || coro.done())) {
                 target->remove_from_list();
@@ -188,8 +197,8 @@ class promise_handle<void> {
     }
 
     bool resume() {
-        if (promise_base::is_resumable(_coro_base->_outer)) {
-            _coro_base->_outer->_coro.resume();
+        if (promise_base::is_resumable(_coro_base->prev())) {
+            _coro_base->prev()->_coro.resume();
             destroy();
             return true;
         }
@@ -199,7 +208,7 @@ class promise_handle<void> {
 
     void destroy() noexcept {
         if (_coro_base) {
-            promise_base::destroy_chain(_coro_base->_outer, false);
+            promise_base::destroy_chain(_coro_base->prev(), false);
             _coro_base.reset();
         }
     }
@@ -274,8 +283,8 @@ class task {
                 }
                 void await_suspend(coroutine<>) noexcept {
                     // if suspend by caller , then resume to it.
-                    if (me->_outer && me->_outer->_coro)
-                        me->_outer->_coro();
+                    if (me->prev() && me->prev()->_coro)
+                        me->prev()->_coro();
                 }
                 void await_resume() noexcept {}
             };
@@ -383,9 +392,9 @@ class task {
     void reset() noexcept {
         if (coro_) {
             promise_base* inner = &coro_.promise();
-            while (inner->_inner)
-                inner = inner->_inner;
-            promise_base::destroy_chain(inner->_outer, true);
+            while (inner->next())
+                inner = inner->next();
+            promise_base::destroy_chain(inner->prev(), true);
         }
     }
 
@@ -546,13 +555,12 @@ class task_holder {
     task_holder& operator=(const task_holder&) = delete;
     void reset() noexcept {
         if (_coro_base) {
-            promise_base* inner = _coro_base->_inner;
-            while (inner->_inner)
-                inner = inner->_inner;
-            promise_base::destroy_chain(inner->_outer, true);
-            inner->_outer = nullptr;
-            _coro_base->_inner = nullptr;
-            _coro_base->_outer = nullptr;
+            promise_base* inner = _coro_base->next();
+            while (inner->next())
+                inner = inner->next();
+            promise_base::destroy_chain(inner->prev(), true);
+            inner->reset();
+            _coro_base->reset();
         }
     }
     ~task_holder() noexcept { reset(); }
