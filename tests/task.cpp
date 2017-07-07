@@ -248,7 +248,7 @@ int main() {
         auto new_task = awaitable_tasks::when_any(tasks.begin(), tasks.end())
                             .then([](std::pair<size_t, int>& xx)
                                       -> awaitable_tasks::task<std::pair<size_t, int>> {
-                                // will leak, do not use without promise_handle cotrol
+                                // will leak, do not use without promise_handle control
                                 co_await awaitable_tasks::ex::suspend_never{};
                                 std::cout << "ok " << std::endl;
                                 return xx;

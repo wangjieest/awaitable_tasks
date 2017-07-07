@@ -159,8 +159,8 @@ struct promise_base : detail::node_link_t<promise_base> {
             auto coro = target->_coro;
             if (coro && (force || coro.done())) {
                 target->remove_from_list();
-                coro.destroy();
                 destroy_chain(outer, force);
+                coro.destroy();
             }
         }
     }
@@ -328,6 +328,8 @@ class task {
     bool await_ready() noexcept { return is_done_or_empty(); }
     template<typename P>
     void await_suspend(coroutine<P> caller_coro) noexcept {
+        // without promise_handle control ,will leak
+        assert(coro_.promise().next() || coro_.promise().prev());
         caller_coro.promise().insert_before(&coro_.promise());
     }
     T await_resume() {
