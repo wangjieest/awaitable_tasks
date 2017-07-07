@@ -8,9 +8,7 @@
 #else
 #define AWAITABLE_TASKS_TRACE(fmt, ...)
 #endif
-__declspec(selectany) uint32_t promise_count = 0;
-
-#define AWAITABLE_TASKS_VARIANT_MPARK
+//#define AWAITABLE_TASKS_CAPTURE_EXCEPTION
 #if defined(AWAITABLE_TASKS_VARIANT_MAPBOX)
 #include "mapbox/variant.hpp"
 #elif defined(AWAITABLE_TASKS_VARIANT_MPARK)
@@ -180,8 +178,7 @@ class promise_handle<void> {
     template<typename V>
     promise_handle& operator=(const promise_handle<V>& rhs) = delete;
     template<typename V>
-    promise_handle(promise_handle<V>&& rhs) noexcept {
-        _coro_base = rhs._coro_base;
+    promise_handle(promise_handle<V>&& rhs) : _coro_base(std::move(rhs._coro_base)) noexcept {
         rhs._coro_base = nullptr;
         _result = std::move(rhs._result);
         return *this;
@@ -189,8 +186,8 @@ class promise_handle<void> {
     template<typename V>
     promise_handle& operator=(promise_handle<V>&& rhs) noexcept {
         if (this != std::addressof(rhs)) {
-            _coro_base = rhs._coro_base;
-            rhs._coro_base = nullptr;
+            rhs._coro_base.reset();
+            _coro_base.swap(rhs._coro_base);
             _result = std::move(rhs._result);
         }
         return *this;
@@ -215,32 +212,20 @@ class promise_handle<void> {
     ~promise_handle() noexcept { destroy(); }
 
   protected:
-    std::shared_ptr<promise_base> _coro_base;
+    std::unique_ptr<promise_base> _coro_base = std::make_unique<promise_base>();
     std::shared_ptr<void> _result;
 };
 
 template<typename T>
 class promise_handle : public promise_handle<> {
   public:
-    promise_handle() {
-        _coro_base = std::make_shared<promise_base>();
-        _result = std::make_shared<T>();
-    };
+    promise_handle() { _result = std::make_shared<T>(); };
     ~promise_handle() = default;
     promise_handle(const promise_handle& rhs) = delete;
     promise_handle& operator=(const promise_handle& rhs) = delete;
-    promise_handle(promise_handle&& rhs) noexcept {
-        _coro_base = rhs._coro_base;
-        rhs._coro_base = nullptr;
-        _result = std::move(rhs._result);
-    }
+    promise_handle(promise_handle&& rhs) : promise_base(std::move(rhs)) noexcept {}
     promise_handle& operator=(promise_handle&& rhs) noexcept {
-        if (this != std::addressof(rhs)) {
-            _coro_base = rhs._coro_base;
-            rhs._coro_base = nullptr;
-            _result = std::move(rhs._result);
-        }
-        return *this;
+        return promise_base.operator=(std::move(rhs));
     }
 
     template<typename U>
@@ -249,8 +234,7 @@ class promise_handle : public promise_handle<> {
         resume();
     }
     void set_exception(std::exception_ptr eptr) {
-        auto coro =
-            static_cast<coroutine<task<T>::promise_type>*>(static_cast<coroutine<>*>(ctb_.get()));
+        auto coro = static_cast<coroutine<task<T>::promise_type>*>(&_coro_base->prev()->_coro);
         coro->promise().set_eptr(std::move(eptr));
         resume();
     }
@@ -295,10 +279,10 @@ class task {
         void return_value(U&& value) {
             result_ = std::forward<U>(value);
         }
-
+#ifdef AWAITABLE_TASKS_CAPTURE_EXCEPTION
         void uncought_exceptions() { set_eptr(std::current_exception()); }
         void set_exception(std::exception_ptr eptr) noexcept { set_eptr(std::move(eptr)); }
-
+#endif
 #if defined(AWAITABLE_TASKS_VARIANT_MAPBOX) || defined(AWAITABLE_TASKS_VARIANT_MPARK) || \
     defined(AWAITABLE_TASKS_VARIANT_STD)
         void set_eptr(std::exception_ptr eptr) noexcept { result_ = std::move(eptr); }
@@ -312,7 +296,10 @@ class task {
 
         void set_caller(coroutine<> caller_coro) noexcept { _caller = caller_coro; }
         void throw_if_exception() const {
-#if defined(AWAITABLE_TASKS_VARIANT_MAPBOX)
+#if defined(AWAITABLE_TASKS_CAPTURE_EXCEPTION)
+            if (eptr_)
+                std::rethrow_exception(eptr_);
+#elif defined(AWAITABLE_TASKS_VARIANT_MAPBOX)
             if (result_.which() == result_.which<std::exception_ptr>())
                 std::rethrow_exception(result_.get<std::exception_ptr>());
             else if (result_.which() != result_.which<result_type>())
@@ -336,23 +323,6 @@ class task {
 #else
         std::exception_ptr eptr_ = nullptr;
         result_type result_{};
-#endif
-
-#define AWAIT_TASKS_TRACE_PROMISE
-#ifdef AWAIT_TASKS_TRACE_PROMISE
-        using alloc_of_char_type = std::allocator<char>;
-        void* operator new(size_t size) {
-            alloc_of_char_type al;
-            auto ptr = al.allocate(size);
-            AWAITABLE_TASKS_TRACE("promise created:%p total:%u", ptr, ++promise_count);
-            return ptr;
-        }
-
-        void operator delete(void* ptr, size_t size) noexcept {
-            alloc_of_char_type al;
-            AWAITABLE_TASKS_TRACE("promise destroy:%p total:%u", ptr, --promise_count);
-            return al.deallocate(static_cast<char*>(ptr), size);
-        }
 #endif
     };
     bool await_ready() noexcept { return is_done_or_empty(); }

@@ -32,7 +32,7 @@
 #define ASIO_TASK_VARIANT_STD 3
 
 #ifndef ASIO_TASK_IMPL
-#define ASIO_TASK_IMPL ASIO_TASK_VARIANT_MPARK
+#define ASIO_TASK_IMPL ASIO_TASK_EXCEPTION
 #endif
 
 #if ASIO_TASK_IMPL == ASIO_TASK_VARIANT_MAPBOX
@@ -185,7 +185,7 @@ class promise_handler<void> {
     std::shared_ptr<promise_type> promise_handle_;
 };
 
-#if 1
+#ifdef AWAITABLE_TASKS_CAPTURE_EXCEPTION
 // promise has set_exception will handle exception self.
 #else
 // Ensure any exceptions thrown from the handler are propagated back to the
