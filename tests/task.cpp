@@ -85,7 +85,7 @@ int main() {
     {
         awaitable_tasks::promise_handle<int> old_task_handle;
         old_task_handle.get_task().then(func);
-        old_task_handle.resume();
+        old_task_handle.resume();  // will do
     }
 
     // make_task then and then

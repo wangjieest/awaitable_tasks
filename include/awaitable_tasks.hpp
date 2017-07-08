@@ -8,13 +8,13 @@
 #else
 #define AWAITABLE_TASKS_TRACE(fmt, ...)
 #endif
-//#define AWAITABLE_TASKS_CAPTURE_EXCEPTION
-#if defined(AWAITABLE_TASKS_VARIANT_MAPBOX)
-#include "mapbox/variant.hpp"
-#elif defined(AWAITABLE_TASKS_VARIANT_MPARK)
+
+#if defined(AWAITABLE_TASKS_VARIANT_MPARK)
 #include "mpark/include/mpark/variant.hpp"
+#define NS_VARIANT mpark
 #elif defined(AWAITABLE_TASKS_VARIANT_STD)
 #include <variant>
+#define NS_VARIANT std
 #endif
 
 #pragma pack(push)
@@ -24,16 +24,9 @@
 #pragma pack(8)
 #endif
 namespace awaitable_tasks {
-#if defined(AWAITABLE_TASKS_VARIANT_MAPBOX)
-#define NS_VARIANT mapbox::util
-#elif defined(AWAITABLE_TASKS_VARIANT_STD)
-#define NS_VARIANT std
-#elif defined(AWAITABLE_TASKS_VARIANT_MPARK)
-#define NS_VARIANT mpark
-#endif
-template<typename T = void>
-using coroutine = std::experimental::coroutine_handle<T>;
 namespace ex = std::experimental;
+template<typename T = void>
+using coroutine = ex::coroutine_handle<T>;
 template<typename>
 class task;
 
@@ -261,12 +254,8 @@ class task {
         auto final_suspend() noexcept {
             struct final_awaiter {
                 promise_type* me;
-                bool await_ready() noexcept {
-                    // suspend point
-                    return false;
-                }
+                bool await_ready() noexcept { return false; }
                 void await_suspend(coroutine<>) noexcept {
-                    // if suspend by caller , then resume to it.
                     if (me->prev() && me->prev()->_coro)
                         me->prev()->_coro();
                 }
@@ -279,10 +268,9 @@ class task {
         void return_value(U&& value) {
             result_ = std::forward<U>(value);
         }
-#ifdef AWAITABLE_TASKS_CAPTURE_EXCEPTION
         void uncought_exceptions() { set_eptr(std::current_exception()); }
         void set_exception(std::exception_ptr eptr) noexcept { set_eptr(std::move(eptr)); }
-#endif
+
 #if defined(NS_VARIANT)
         void set_eptr(std::exception_ptr eptr) noexcept { result_ = std::move(eptr); }
 #else
@@ -293,17 +281,8 @@ class task {
             result_ = std::move(value);
         }
 
-        void set_caller(coroutine<> caller_coro) noexcept { _caller = caller_coro; }
         void throw_if_exception() const {
-#if defined(AWAITABLE_TASKS_CAPTURE_EXCEPTION)
-            if (eptr_)
-                std::rethrow_exception(eptr_);
-#elif defined(AWAITABLE_TASKS_VARIANT_MAPBOX)
-            if (result_.which() == result_.which<std::exception_ptr>())
-                std::rethrow_exception(result_.get<std::exception_ptr>());
-            else if (result_.which() != result_.which<result_type>())
-                throw std::runtime_error("value not returned");
-#elif defined(AWAITABLE_TASKS_VARIANT_MPARK) || defined(AWAITABLE_TASKS_VARIANT_STD)
+#if defined(NS_VARIANT)
             if (NS_VARIANT::get_if<std::exception_ptr>(&result_))
                 std::rethrow_exception(NS_VARIANT::get<std::exception_ptr>(result_));
             else if (NS_VARIANT::get_if<monostate>(&result_))
@@ -332,9 +311,7 @@ class task {
     }
     T await_resume() {
         coro_.promise().throw_if_exception();
-#if defined(AWAITABLE_TASKS_VARIANT_MAPBOX)
-        return std::move(coro_.promise().get_result().get<T>());
-#elif defined(AWAITABLE_TASKS_VARIANT_MPARK) || defined(AWAITABLE_TASKS_VARIANT_STD)
+#if defined(NS_VARIANT)
         return std::move(NS_VARIANT::get<T>(coro_.promise().get_result()));
 #else
         return std::move(coro_.promise().get_result());
