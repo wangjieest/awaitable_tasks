@@ -2,9 +2,6 @@
 	path = asio_test/asio
 	url = https://github.com/chriskohlhoff/asio.git
 	branch = asio-1-10-6
-[submodule "include/mapbox"]
-	path = include/mapbox
-	url = https://github.com/mapbox/variant.git
 [submodule "include/mpark"]
 	path = include/mpark
 	url = https://github.com/mpark/variant.git
