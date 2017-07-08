@@ -482,43 +482,38 @@ class task {
 
 class task_holder {
   public:
-    task_holder() = default;
+    task_holder() : _coro_base(std::make_unique<promise_base>()) {}
     template<typename T>
-    task_holder(task<T>&& t) {
+    task_holder(task<T>&& t) : _coro_base(std::make_unique<promise_base>()) {
         if (t.coro_) {
-            _coro_base.insert_before(&t.coro_.promise());
+            _coro_base->insert_before(&t.coro_.promise());
             t.coro_ = nullptr;
         }
     }
-    task_holder(task_holder&& rhs) {
-        _coro_base = rhs._coro_base;
-        rhs._coro_base._coro = nullptr;
-        rhs._coro_base.reset();
-    }
+    task_holder(task_holder&& rhs) : _coro_base(std::move(rhs._coro_base)) {}
     task_holder& operator=(task_holder&& rhs) {
         if (this != std::addressof(rhs)) {
-            _coro_base = rhs._coro_base;
-            rhs._coro_base._coro = nullptr;
-            rhs._coro_base.reset();
+            _coro_base.reset();
+            _coro_base.swap(rhs._coro_base);
         }
         return *this;
     }
     task_holder(const task_holder& rhs) = delete;
     task_holder& operator=(const task_holder&) = delete;
     void reset() noexcept {
-        if (_coro_base.next()) {
-            promise_base* inner = _coro_base.next();
-            while (inner)
+        if (_coro_base) {
+            promise_base* inner = _coro_base->next();
+            while (inner->next())
                 inner = inner->next();
             promise_base::destroy_chain(inner->prev(), true);
             inner->reset();
-            _coro_base.reset();
+            _coro_base->reset();
         }
     }
     ~task_holder() noexcept { reset(); }
 
   private:
-    promise_base _coro_base;
+    std::unique_ptr<promise_base> _coro_base;
 };
 }
 
