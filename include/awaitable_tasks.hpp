@@ -151,12 +151,13 @@ struct promise_base : detail::node_link_t<promise_base> {
         if (target) {
             auto outer = target->prev();
             auto coro = target->_coro;
-            auto& coro_ptr = target->_coro_ptr;
+            auto coro_ptr = target->_coro_ptr;
             if (coro && (force || coro.done())) {
                 target->remove_from_list();
                 destroy_chain(outer, force);
-                *coro_ptr = nullptr;
                 coro.destroy();
+                if (coro_ptr)
+                    *coro_ptr = nullptr;
             }
         }
     }
@@ -375,6 +376,7 @@ class task {
             while (inner->next())
                 inner = inner->next();
             promise_base::destroy_chain(inner->prev(), true);
+            _coro = nullptr;
         }
     }
     bool is_done_or_empty() noexcept { return _coro ? _coro.done() : true; }
