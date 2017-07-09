@@ -3,12 +3,12 @@
 #include <memory>
 #include <cassert>
 
-#if 0
+#if 1
 #define AWAITABLE_TASKS_TRACE(fmt, ...) printf("\n" fmt "\n", ##__VA_ARGS__)
 #else
 #define AWAITABLE_TASKS_TRACE(fmt, ...)
 #endif
-
+__declspec(selectany) uint32_t g_frame_count = 0;
 #if defined(AWAITABLE_TASKS_VARIANT_MPARK)
 #include "mpark/include/mpark/variant.hpp"
 #define NS_VARIANT mpark
@@ -140,6 +140,7 @@ struct node_link_t {
 
 struct promise_base : detail::node_link_t<promise_base> {
     coroutine<> _coro = nullptr;
+    coroutine<>* _coro_ptr = nullptr;  // point to task's coro
     static bool is_valid(promise_base* coro_base) noexcept {
         return coro_base && coro_base->_coro && coro_base->_coro;
     }
@@ -150,12 +151,19 @@ struct promise_base : detail::node_link_t<promise_base> {
         if (target) {
             auto outer = target->prev();
             auto coro = target->_coro;
+            auto& coro_ptr = target->_coro_ptr;
             if (coro && (force || coro.done())) {
                 target->remove_from_list();
                 destroy_chain(outer, force);
+                *coro_ptr = nullptr;
                 coro.destroy();
             }
         }
+    }
+    void swap(promise_base& rhs) {
+        std::swap(_prev, rhs._prev);
+        std::swap(_next, rhs._next);
+        std::swap(_coro, rhs._coro);
     }
 };
 
@@ -205,6 +213,7 @@ class promise_handle<void> {
     ~promise_handle() noexcept { destroy(); }
 
   protected:
+    // TODO: use coro from task itself
     std::unique_ptr<promise_base> _coro_base = std::make_unique<promise_base>();
     std::shared_ptr<void> _result;
 };
@@ -238,7 +247,7 @@ class promise_handle : public promise_handle<> {
             co_await ex::suspend_always{};
             return *(value.get());
         }(std::move(result));
-        _coro_base->insert_after(&t.coro_.promise());
+        _coro_base->insert_after(&t._coro.promise());
         return std::move(t);
     }
 };
@@ -301,52 +310,74 @@ class task {
         std::exception_ptr eptr_ = nullptr;
         result_type result_{};
 #endif
+#define AWAIT_TASKS_TRACE_PROMISE
+#ifdef AWAIT_TASKS_TRACE_PROMISE
+        using alloc_of_char_type = std::allocator<char>;
+        void* operator new(size_t size) {
+            alloc_of_char_type al;
+            auto ptr = al.allocate(size);
+            AWAITABLE_TASKS_TRACE("promise created %p %u", ptr, ++g_frame_count);
+            return ptr;
+        }
+        void operator delete(void* ptr, size_t size) noexcept {
+            alloc_of_char_type al;
+            AWAITABLE_TASKS_TRACE("promise destroy %p %u", ptr, --g_frame_count);
+            return al.deallocate(static_cast<char*>(ptr), size);
+        }
+#endif
     };
     bool await_ready() noexcept { return is_done_or_empty(); }
     template<typename P>
     void await_suspend(coroutine<P> caller_coro) noexcept {
         // without promise_handle control ,will leak
-        assert(coro_.promise().next() || coro_.promise().prev());
-        caller_coro.promise().insert_before(&coro_.promise());
+        assert(_coro.promise().next() || _coro.promise().prev());
+        caller_coro.promise().insert_before(&_coro.promise());
     }
     T await_resume() {
-        coro_.promise().throw_if_exception();
+        _coro.promise().throw_if_exception();
 #if defined(NS_VARIANT)
-        return std::move(NS_VARIANT::get<T>(coro_.promise().get_result()));
+        return std::move(NS_VARIANT::get<T>(_coro.promise().get_result()));
 #else
-        return std::move(coro_.promise().get_result());
+        return std::move(_coro.promise().get_result());
 #endif
     }
 
     explicit task(promise_type& prom) noexcept
-        : coro_(coroutine<promise_type>::from_promise(prom)) {
-        prom._coro = coro_;
+        : _coro(coroutine<promise_type>::from_promise(prom)) {
+        prom._coro = _coro;
+        prom._coro_ptr = &_coro;
     }
 
     task() = default;
     task(task const&) = delete;
     task& operator=(task const&) = delete;
-    task(task&& rhs) noexcept : coro_(rhs.coro_) { rhs.coro_ = nullptr; }
+    task(task&& rhs) noexcept : _coro(rhs._coro) {
+        _coro.promise()._coro_ptr = &_coro;
+        rhs._coro = nullptr;
+    }
     task& operator=(task&& rhs) noexcept {
         if (this != std::addressof(rhs)) {
-            coro_ = rhs.coro_;
-            rhs.coro_ = nullptr;
+            _coro = rhs._coro;
+            _coro.promise()._coro_ptr = &_coro;
+            rhs._coro = nullptr;
         }
         return *this;
     }
-    ~task() = default;
+    ~task() {
+        if (_coro) {
+            std::cout << "task dtor" << std::endl;
+        }
+    };
 
     void reset() noexcept {
-        if (coro_) {
-            promise_base* inner = &coro_.promise();
+        if (_coro) {
+            promise_base* inner = &_coro.promise();
             while (inner->next())
                 inner = inner->next();
             promise_base::destroy_chain(inner->prev(), true);
         }
     }
-
-    bool is_valid() noexcept { return coro_ != nullptr; }
-    bool is_done_or_empty() noexcept { return coro_ ? coro_.done() : true; }
+    bool is_done_or_empty() noexcept { return _coro ? _coro.done() : true; }
 
   private:
     template<typename>
@@ -354,7 +385,7 @@ class task {
     friend class task_holder;
     template<typename>
     friend class promise_handle;
-    coroutine<promise_type> coro_ = nullptr;
+    coroutine<promise_type> _coro = nullptr;
 
 #pragma region then_impl
   public:
@@ -482,38 +513,43 @@ class task {
 
 class task_holder {
   public:
-    task_holder() : _coro_base(std::make_unique<promise_base>()) {}
+    task_holder() {}
     template<typename T>
-    task_holder(task<T>&& t) : _coro_base(std::make_unique<promise_base>()) {
-        if (t.coro_) {
-            _coro_base->insert_before(&t.coro_.promise());
-            t.coro_ = nullptr;
+    task_holder(task<T>&& t) {
+        if (t._coro) {
+            _base.insert_before(&t._coro.promise());
         }
     }
-    task_holder(task_holder&& rhs) : _coro_base(std::move(rhs._coro_base)) {}
+    task_holder(task_holder&& rhs) {
+        _base.swap(rhs._base);
+        if (_base.next())
+            _base.next()->_prev = &_base;
+    }
     task_holder& operator=(task_holder&& rhs) {
         if (this != std::addressof(rhs)) {
-            _coro_base.reset();
-            _coro_base.swap(rhs._coro_base);
+            reset();
+            _base.swap(rhs._base);
+            if (_base.next())
+                _base.next()->_prev = &_base;
         }
         return *this;
     }
     task_holder(const task_holder& rhs) = delete;
     task_holder& operator=(const task_holder&) = delete;
     void reset() noexcept {
-        if (_coro_base) {
-            promise_base* inner = _coro_base->next();
+        if (_base.next()) {
+            promise_base* inner = _base.next();
             while (inner->next())
                 inner = inner->next();
             promise_base::destroy_chain(inner->prev(), true);
             inner->reset();
-            _coro_base->reset();
         }
+        _base.reset();
     }
     ~task_holder() noexcept { reset(); }
 
   private:
-    std::unique_ptr<promise_base> _coro_base;
+    promise_base _base;
 };
 }
 
