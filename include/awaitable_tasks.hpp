@@ -524,20 +524,11 @@ namespace awaitable_tasks {
 namespace detail {
 template<typename T>
 struct when_all_range_context {
-    template<typename R>
-    using result_type = std::vector<R>;
-
-    using data_type = result_type<T>;
-    using retrun_type = task<data_type>;
-
-    using holder_type = detail::Unkown;
-    using task_holder_type = task<holder_type>;
-    using task_holder_container_type = std::vector<task_holder_type>;
-
-    promise_handle<holder_type> handle;
-    data_type results;
+    using retrun_type = task<std::vector<T>>;
+    promise_handle<detail::Unkown> handle;
+    std::vector<T> results;
     size_t task_count = 0;
-    task_holder_container_type tasks_holder;
+    std::vector<task<detail::Unkown>> tasks_holder;
 };
 }
 
@@ -575,20 +566,13 @@ namespace awaitable_tasks {
 namespace detail {
 template<typename T>
 struct when_n_range_context {
-    template<typename R>
-    using result_type = std::vector<std::pair<size_t, R>>;
-    using data_type = result_type<T>;
+    using data_type = std::vector<std::pair<size_t, T>>;
     using retrun_type = task<data_type>;
-    using holder_type = detail::Unkown;
-    using task_holder_type = task<holder_type>;
-    using task_holder_container_type = std::vector<task_holder_type>;
-
     inline void set_result(size_t idx, T& data) { results.emplace_back(idx, std::move(data)); }
-
-    promise_handle<holder_type> handle;
+    promise_handle<detail::Unkown> handle;
     data_type results;
     size_t task_count = 0;
-    task_holder_container_type tasks_holder;
+    std::vector<task<detail::Unkown>> tasks_holder;
 };
 }
 
@@ -636,9 +620,7 @@ namespace detail {
 template<typename... Ts>
 struct when_variadic_context {
     using result_type = std::tuple<std::decay_t<typename isTaskOrRet<Ts>::Inner>...>;
-    using data_type = result_type;
-    using task_type = task<data_type>;
-
+    using task_type = task<result_type>;
     template<size_t I, typename T>
     inline void set_variadic_result(T& t) {
         if (task_count != 0) {
@@ -648,9 +630,9 @@ struct when_variadic_context {
         }
     }
     promise_handle<detail::Unkown> handle;
-    data_type results;
+    result_type results;
     size_t task_count = sizeof...(Ts);
-    std::array<task<Unkown>, sizeof...(Ts)> tasks_holder;
+    std::array<task<detail::Unkown>, sizeof...(Ts)> tasks_holder;
 };
 template<typename T, typename F>
 inline auto task_transform(T& t, F&& f) {
