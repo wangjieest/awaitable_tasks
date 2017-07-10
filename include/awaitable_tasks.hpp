@@ -174,8 +174,8 @@ class promise_handle {
     promise_handle() : _result(std::make_shared<T>()) {}
     promise_handle(const promise_handle& rhs) = delete;
     promise_handle& operator=(const promise_handle& rhs) = delete;
-    promise_handle(promise_handle&& rhs) = default;
-    promise_handle& operator=(promise_handle&& rhs) = default;
+    promise_handle(promise_handle&& rhs) noexcept = default;
+    promise_handle& operator=(promise_handle&& rhs) noexcept = default;
     template<typename U>
     void set_value(U&& value) {
         *_result.get() = std::forward<U>(value);
@@ -223,8 +223,8 @@ class promise_handle {
         await_type() = default;
         await_type(const await_type&) = delete;
         await_type& operator=(const await_type&) = delete;
-        await_type(await_type&&) = default;
-        await_type& operator=(await_type&&) = default;
+        await_type(await_type&&) noexcept = default;
+        await_type& operator=(await_type&&) noexcept = default;
 
         bool await_ready() { return false; }
         template<typename P>
@@ -496,8 +496,8 @@ class task_holder {
             _base.insert_before(&t._coro.promise());
         }
     }
-    task_holder(task_holder&& rhs) = default;
-    task_holder& operator=(task_holder&& rhs) = default;
+    task_holder(task_holder&& rhs) noexcept = default;
+    task_holder& operator=(task_holder&& rhs) noexcept = default;
     task_holder(const task_holder& rhs) = delete;
     task_holder& operator=(const task_holder&) = delete;
     void reset() noexcept {
