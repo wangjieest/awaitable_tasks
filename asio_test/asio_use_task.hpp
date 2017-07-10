@@ -59,7 +59,7 @@ class use_task_t {
     ASIO_CONSTEXPR use_task_t() {}
 
     /// Construct using specified allocator.
-    explicit use_task_t(const Allocator& allocator) : allocator_(allocator) {}
+    explicit use_task_t(const Allocator& allocator) : _allocator(allocator) {}
 
     /// Specify an alternate allocator.
     template<typename OtherAllocator>
@@ -68,10 +68,10 @@ class use_task_t {
     }
 
     /// Obtain allocator.
-    allocator_type get_allocator() const { return allocator_; }
+    allocator_type get_allocator() const { return _allocator; }
 
   private:
-    Allocator allocator_;
+    Allocator _allocator;
 };
 
 /// A special value, similar to std::nothrow.
@@ -103,38 +103,39 @@ class promise_handler {
     using promise_type = awaitable_tasks::promise_handle<result_type_t>;
     // Construct from use_task special value.
     template<typename Allocator>
-    promise_handler(use_task_t<Allocator> uf) {
-        promise_handle_ = std::allocate_shared<promise_type>(uf.get_allocator());
-    }
+    promise_handler(use_task_t<Allocator> /*uf*/) {}
+    promise_handler(const promise_handler&) = delete;
+    promise_handler& operator=(const promise_handler&) = delete;
+    promise_handler(promise_handler&&) = default;
+    promise_handler& operator=(promise_handler&&) = default;
 
     void operator()(T t) {
 #if defined(ASIO_TASK_VARIANT) || defined(ASIO_TASK_EXCEPTION)
-        promise_handle_->set_value(std::move(t));
+        _promise_handle.set_value(std::move(t));
 #else
-        promise_handle_->set_value(result_type_t(asio::error_code(), std::move(t)));
+        _promise_handle.set_value(result_type_t(asio::error_code(), std::move(t)));
 #endif
     }
-
     void operator()(const asio::error_code& ec, T t) {
 #if defined(ASIO_TASK_VARIANT)
         if (ec) {
-            promise_handle_->set_value(std::move(ec));
+            _promise_handle.set_value(std::move(ec));
         } else {
-            promise_handle_->set_value(std::move(t));
+            _promise_handle.set_value(std::move(t));
         }
 #elif defined(ASIO_TASK_EXCEPTION)
         if (ec) {
-            promise_handle_->set_exception(std::make_exception_ptr(asio::system_error(ec)));
+            _promise_handle.set_exception(std::make_exception_ptr(asio::system_error(ec)));
         } else {
-            promise_handle_->set_value(std::move(t));
+            _promise_handle.set_value(std::move(t));
         }
 #else
-        promise_handle_->set_value(result_type_t(ec, std::move(t)));
+        _promise_handle.set_value(result_type_t(ec, std::move(t)));
 #endif
     }
 
     // private:
-    std::shared_ptr<promise_type> promise_handle_;
+    promise_type _promise_handle;
 };
 
 // Completion handler to adapt a void promise as a completion handler.
@@ -146,26 +147,27 @@ class promise_handler<void> {
 
     // Construct from use_task special value. Used during rebinding.
     template<typename Allocator>
-    promise_handler(use_task_t<Allocator> uf) {
-        promise_handle_ = std::allocate_shared<promise_type>(uf.get_allocator());
-    }
+    promise_handler(use_task_t<Allocator> /*uf*/) {}
+    promise_handler(const promise_handler&) = delete;
+    promise_handler& operator=(const promise_handler&) = delete;
+    promise_handler(promise_handler&&) = default;
+    promise_handler& operator=(promise_handler&&) = default;
 
-    void operator()() { promise_handle_->resume(); }
-
+    void operator()() { _promise_handle.resume(); }
     void operator()(const asio::error_code& ec) {
 #if defined(ASIO_TASK_EXCEPTION)
         if (ec) {
-            promise_handle_->set_exception(std::make_exception_ptr(asio::system_error(ec)));
+            _promise_handle.set_exception(std::make_exception_ptr(asio::system_error(ec)));
         } else {
-            promise_handle_->set_value(std::move(ec));
+            _promise_handle.set_value(std::move(ec));
         }
 #else
-        promise_handle_->set_value(std::move(ec));
+        _promise_handle.set_value(std::move(ec));
 #endif
     }
 
     // private:
-    std::shared_ptr<promise_type> promise_handle_;
+    promise_type _promise_handle;
 };
 
 // #if defined(ASIO_TASK_EXCEPTION)
@@ -197,7 +199,7 @@ class async_result<detail::promise_handler<T>> {
     // Constructor creates a new promise for the async operation, and obtains the
     // corresponding task.
     explicit async_result(detail::promise_handler<T>& h) {
-        task_ = std::move(h.promise_handle_->get_task());
+        task_ = std::move(h._promise_handle.get_task());
     }
 
     // Obtain the task to be returned from the initiating function.

@@ -172,7 +172,7 @@ struct promise_base : detail::node_link_t<promise_base> {
 template<typename T>
 class promise_handle {
   public:
-    promise_handle(){};
+    promise_handle() : _result(std::make_shared<T>()) {}
     promise_handle(const promise_handle& rhs) = delete;
     promise_handle& operator=(const promise_handle& rhs) = delete;
     promise_handle(promise_handle&& rhs) noexcept : _result(std::move(rhs._result)) {
