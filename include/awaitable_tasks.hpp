@@ -165,62 +165,38 @@ struct promise_base : detail::node_link_t<promise_base> {
         std::swap(_prev, rhs._prev);
         std::swap(_next, rhs._next);
         std::swap(_coro, rhs._coro);
+        std::swap(_coro_ptr, rhs._coro_ptr);
     }
-};
-
-template<typename T = void>
-class promise_handle;
-
-template<>
-class promise_handle<void> {
-  public:
-    promise_handle() = default;
-    promise_handle(const promise_handle& rhs) = delete;
-    promise_handle& operator=(const promise_handle& rhs) = delete;
-    promise_handle(promise_handle&& rhs) = delete;
-    promise_handle& operator=(promise_handle&& rhs) = delete;
-
-    bool resume() {
-        if (promise_base::is_resumable(_coro_base.prev())) {
-            _coro_base.prev()->_coro.resume();
-            destroy();
-            return true;
-        }
-        return false;
-    }
-    void operator()() { resume(); }
-
-    void destroy() noexcept {
-        if (_coro_base.prev()) {
-            promise_base::destroy_chain(_coro_base.prev(), false);
-            _coro_base.reset();
-        }
-    }
-    ~promise_handle() noexcept { destroy(); }
-
-  protected:
-    // TODO: use coro from task itself
-    promise_base _coro_base;
-    std::shared_ptr<void> _result;
 };
 
 template<typename T>
-class promise_handle : public promise_handle<> {
+class promise_handle {
   public:
-    promise_handle() { _result = std::make_shared<T>(); };
-    ~promise_handle() = default;
+    promise_handle(){};
     promise_handle(const promise_handle& rhs) = delete;
     promise_handle& operator=(const promise_handle& rhs) = delete;
-    promise_handle(promise_handle&& rhs) = delete;
-    promise_handle& operator=(promise_handle&& rhs) = delete;
-
+    promise_handle(promise_handle&& rhs) noexcept : _result(std::move(rhs._result)) {
+        _base.swap(rhs._base);
+        if (_base.prev())
+            _base.prev()->_next = &_base;
+    }
+    promise_handle& operator=(promise_handle&& rhs) noexcept {
+        if (this != std::addressof(rhs)) {
+            _result = std::move(rhs._result);
+            _base.reset();
+            _base.swap(rhs._base);
+            if (_base.prev())
+                _base.prev()->_next = &_base;
+        }
+        return *this;
+    }
     template<typename U>
     void set_value(U&& value) {
         *reinterpret_cast<T*>(_result.get()) = std::forward<U>(value);
         resume();
     }
     void set_exception(std::exception_ptr eptr) {
-        auto coro = static_cast<coroutine<task<T>::promise_type>*>(&_coro_base.prev()->_coro);
+        auto coro = static_cast<coroutine<task<T>::promise_type>*>(&_base.prev()->_coro);
         coro->promise().set_eptr(std::move(eptr));
         resume();
     }
@@ -231,9 +207,38 @@ class promise_handle : public promise_handle<> {
             co_await ex::suspend_always{};
             return *(value.get());
         }(std::move(result));
-        _coro_base.insert_after(&t._coro.promise());
+        _base.insert_after(&t._coro.promise());
         return std::move(t);
     }
+
+    bool resume() {
+        if (promise_base::is_resumable(_base.prev())) {
+            _base.prev()->_coro.resume();
+            destroy();
+            return true;
+        }
+        return false;
+    }
+    void operator()() { resume(); }
+
+    void destroy() noexcept {
+        if (_base.prev()) {
+            promise_base::destroy_chain(_base.prev(), false);
+            _base.reset();
+        }
+    }
+    ~promise_handle() noexcept { destroy(); }
+
+    //     bool await_ready() noexcept { return false; }
+    //     template<typename P>
+    //     void await_suspend(coroutine<P> caller_coro) noexcept {
+    //         _base.insert_after(&t._coro.promise());
+    //     }
+    //     T await_resume() { return *reinterpret_cast<T*>(_result.get()); }
+
+  protected:
+    promise_base _base;
+    std::shared_ptr<void> _result;
 };
 
 template<typename T>
