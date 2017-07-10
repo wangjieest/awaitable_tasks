@@ -196,28 +196,7 @@ class async_result<detail::promise_handler<T>> {
 // reduce task cout
 #define ASIO_TASK_ASYNC_AWIATABLE
 #ifdef ASIO_TASK_ASYNC_AWIATABLE
-    // refer to zero-cost impl https://gist.github.com/GorNishanov/65195f6e5620f70721597caf920d4dcc
-    // TODO remove shared_ptr for value.
-    typedef typename detail::promise_handler<T>::result_type_t result_type;
-    struct awaiter {
-        awaitable_tasks::promise_base* handle = nullptr;
-        std::shared_ptr<result_type> value;
-        awaiter(awaitable_tasks::promise_base* h, std::shared_ptr<result_type>&& r)
-            : handle(h), value(std::move(r)) {}
-        awaiter(const awaiter&) = delete;
-        awaiter& operator=(const awaiter&) = delete;
-        awaiter(awaiter&&) = default;
-        awaiter& operator=(awaiter&&) = default;
-
-        bool await_ready() { return false; }
-        template<typename P>
-        void await_suspend(awaitable_tasks::coroutine<P> caller_coro) {
-            caller_coro.promise().insert_before(handle);
-        }
-        result_type await_resume() { return std::move(*value.get()); }
-    };
-    typedef awaiter type;
-
+    typedef typename detail::promise_handler<T>::promise_type::await_type type;
 #else
     // The initiating function will return a task.
     typedef awaitable_tasks::task<typename detail::promise_handler<T>::result_type_t> type;
@@ -226,32 +205,26 @@ class async_result<detail::promise_handler<T>> {
     // corresponding task.
     explicit async_result(detail::promise_handler<T>& h) {
 #ifdef ASIO_TASK_ASYNC_AWIATABLE
-        // store handle.
-        _base.insert_before(&h._promise_handle.get_base());
-        _value = h._promise_handle.get_result();
+        _task = std::move(h._promise_handle.make_awaiter());
 #else
-        task_ = std::move(h._promise_handle.get_task());
+        _task = std::move(h._promise_handle.get_task());
 #endif
     }
 
 // Obtain the task to be returned from the initiating function.
 #ifdef ASIO_TASK_ASYNC_AWIATABLE
     type get() {
-        // make awaitable obj
-        auto next = _base.next();
-        _base.remove_from_list();
-        return awaiter{next, std::move(_value)};
+        return std::move(_task);
     }
 #else
-    type get() { return std::move(task_); }
+    type get() { return std::move(_task); }
 #endif
 
   private:
 #ifdef ASIO_TASK_ASYNC_AWIATABLE
-    awaitable_tasks::promise_base _base;
-    std::shared_ptr<result_type> _value;
+    type _task;
 #else
-    type task_;
+    type _task;
 #endif
 };
 
