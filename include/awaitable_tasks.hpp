@@ -192,7 +192,7 @@ class promise_handle {
     }
     template<typename U>
     void set_value(U&& value) {
-        *reinterpret_cast<T*>(_result.get()) = std::forward<U>(value);
+        *_result.get() = std::forward<U>(value);
         resume();
     }
     void set_exception(std::exception_ptr eptr) {
@@ -202,7 +202,7 @@ class promise_handle {
     }
 
     auto get_task() {
-        auto result = std::static_pointer_cast<T>(_result);
+        auto result = _result;
         auto t = [](std::shared_ptr<T> value) -> task<T> {
             co_await ex::suspend_always{};
             return *(value.get());
@@ -228,17 +228,12 @@ class promise_handle {
         }
     }
     ~promise_handle() noexcept { destroy(); }
-
-    //     bool await_ready() noexcept { return false; }
-    //     template<typename P>
-    //     void await_suspend(coroutine<P> caller_coro) noexcept {
-    //         _base.insert_after(&t._coro.promise());
-    //     }
-    //     T await_resume() { return *reinterpret_cast<T*>(_result.get()); }
+    promise_base& get_base() { return _base; }
+    auto get_result() { return _result; }
 
   protected:
     promise_base _base;
-    std::shared_ptr<void> _result;
+    std::shared_ptr<T> _result;
 };
 
 template<typename T>

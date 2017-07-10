@@ -193,20 +193,64 @@ class promise_handler<void> {
 template<typename T>
 class async_result<detail::promise_handler<T>> {
   public:
+    // reduce task cout
+#define ASIO_TASK_ASYNC_AWIATABLE
+#ifdef ASIO_TASK_ASYNC_AWIATABLE
+    typedef typename detail::promise_handler<T>::result_type_t result_type;
+    struct awaiter {
+        awaitable_tasks::promise_base* handle = nullptr;
+        std::shared_ptr<result_type> value;
+        awaiter(awaitable_tasks::promise_base* h, std::shared_ptr<result_type>&& r)
+            : handle(h), value(std::move(r)) {}
+        awaiter(const awaiter&) = delete;
+        awaiter& operator=(const awaiter&) = delete;
+        awaiter(awaiter&&) = default;
+        awaiter& operator=(awaiter&&) = default;
+
+        bool await_ready() { return false; }
+        template<typename P>
+        void await_suspend(awaitable_tasks::coroutine<P> caller_coro) {
+            caller_coro.promise().insert_before(handle);
+        }
+        result_type await_resume() { return *value.get(); }
+    };
+    typedef awaiter type;
+
+#else
     // The initiating function will return a task.
     typedef awaitable_tasks::task<typename detail::promise_handler<T>::result_type_t> type;
-
+#endif
     // Constructor creates a new promise for the async operation, and obtains the
     // corresponding task.
     explicit async_result(detail::promise_handler<T>& h) {
+#ifdef ASIO_TASK_ASYNC_AWIATABLE
+        // store handle.
+        _base.insert_before(&h._promise_handle.get_base());
+        _value = h._promise_handle.get_result();
+#else
         task_ = std::move(h._promise_handle.get_task());
+#endif
     }
 
-    // Obtain the task to be returned from the initiating function.
+// Obtain the task to be returned from the initiating function.
+#ifdef ASIO_TASK_ASYNC_AWIATABLE
+    type get() {
+        // make awaitable obj
+        auto next = _base.next();
+        _base.remove_from_list();
+        return awaiter{next, std::move(_value)};
+    }
+#else
     type get() { return std::move(task_); }
+#endif
 
   private:
+#ifdef ASIO_TASK_ASYNC_AWIATABLE
+    awaitable_tasks::promise_base _base;
+    std::shared_ptr<result_type> _value;
+#else
     type task_;
+#endif
 };
 
 // Handler type specialisation for zero arg.
