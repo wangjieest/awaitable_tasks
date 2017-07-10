@@ -193,9 +193,11 @@ class promise_handler<void> {
 template<typename T>
 class async_result<detail::promise_handler<T>> {
   public:
-    // reduce task cout
+// reduce task cout
 #define ASIO_TASK_ASYNC_AWIATABLE
 #ifdef ASIO_TASK_ASYNC_AWIATABLE
+    // refer to zero-cost impl https://gist.github.com/GorNishanov/65195f6e5620f70721597caf920d4dcc
+    // TODO remove shared_ptr for value.
     typedef typename detail::promise_handler<T>::result_type_t result_type;
     struct awaiter {
         awaitable_tasks::promise_base* handle = nullptr;
@@ -212,7 +214,7 @@ class async_result<detail::promise_handler<T>> {
         void await_suspend(awaitable_tasks::coroutine<P> caller_coro) {
             caller_coro.promise().insert_before(handle);
         }
-        result_type await_resume() { return *value.get(); }
+        result_type await_resume() { return std::move(*value.get()); }
     };
     typedef awaiter type;
 
