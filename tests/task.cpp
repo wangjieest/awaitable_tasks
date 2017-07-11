@@ -249,6 +249,7 @@ int main() {
                             .then([](std::pair<size_t, int>& xx)
                                       -> awaitable_tasks::task<std::pair<size_t, int>> {
                                 // will leak, do not use without promise_handle control
+                                //co_await awaitable_tasks::ex::suspend_always{};
                                 co_await awaitable_tasks::ex::suspend_never{};
                                 std::cout << "ok " << std::endl;
                                 return xx;

@@ -170,21 +170,21 @@ class promise_handler<void> {
     promise_type _promise_handle;
 };
 
-// #if defined(ASIO_TASK_EXCEPTION)
-// // promise has set_exception will handle exception self.
-// #else
-// // Ensure any exceptions thrown from the handler are propagated back to the
-// // caller via the task.
-// template<typename Function, typename T>
-// void asio_handler_invoke(Function f, promise_handler<T>* h) {
-//     auto p(h->promise_handle_);
-//     try {
-//         f();
-//     } catch (...) {
-//         p->set_exception(std::current_exception());
-//     }
-// }
-// #endif
+#if defined(ASIO_TASK_EXCEPTION)
+// promise has set_exception will handle exception self.
+#else
+// Ensure any exceptions thrown from the handler are propagated back to the
+// caller via the task.
+template<typename Function, typename T>
+void asio_handler_invoke(Function& f, promise_handler<T>* h) {
+    auto& p(h->_promise_handle);
+    try {
+        f();
+    } catch (...) {
+        p.set_exception(std::current_exception());
+    }
+}
+#endif
 }  // namespace detail
 
 #if !defined(GENERATING_DOCUMENTATION)

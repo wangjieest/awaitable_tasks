@@ -1,12 +1,13 @@
 ﻿#pragma once
 #include <experimental/resumable>
-#include <memory>
 #include <cassert>
 
+#define AWAITABLE_TASKS_VARIANT_MPARK
 #if defined(AWAITABLE_TASKS_VARIANT_MPARK)
 #include "mpark/include/mpark/variant.hpp"
 #define NS_VARIANT mpark
 #elif defined(AWAITABLE_TASKS_VARIANT_STD)
+// _HAS_CXX17
 #include <variant>
 #define NS_VARIANT std
 #endif
@@ -96,12 +97,14 @@ struct promise_base {
     promise_base* _prev = nullptr;
     promise_base* _next = nullptr;
     coroutine<> _coro = nullptr;
-    void remove_from_list() noexcept {
+    void* _data = nullptr;  // temp store value to set.
+    void remove_from_list(bool clear = true) noexcept {
         if (_prev)
             _prev->_next = _next;
         if (_next)
             _next->_prev = _prev;
-        reset();
+        if (clear)
+            reset();
     }
     void insert_after(promise_base* target) noexcept {
         assert(!_next);
@@ -134,6 +137,7 @@ struct promise_base {
         _prev = nullptr;
         _next = nullptr;
         _coro = nullptr;
+        _data = nullptr;
     }
     static bool is_valid(promise_base* coro_base) noexcept {
         return coro_base && coro_base->_coro && coro_base->_coro;
@@ -171,30 +175,20 @@ struct promise_base {
 template<typename T>
 class promise_handle {
   public:
-    promise_handle() : _result(std::make_shared<T>()) {}
+    promise_handle() {}
     promise_handle(const promise_handle& rhs) = delete;
     promise_handle& operator=(const promise_handle& rhs) = delete;
     promise_handle(promise_handle&& rhs) noexcept = default;
     promise_handle& operator=(promise_handle&& rhs) noexcept = default;
     template<typename U>
     void set_value(U&& value) {
-        *_result.get() = std::forward<U>(value);
+        *reinterpret_cast<T*>(_base.prev()->_data) = std::forward<U>(value);
         resume();
     }
     void set_exception(std::exception_ptr eptr) {
         auto coro = static_cast<coroutine<task<T>::promise_type>*>(&_base.prev()->_coro);
         coro->promise().set_eptr(std::move(eptr));
         resume();
-    }
-
-    auto get_task() {
-        auto result = _result;
-        auto t = [](std::shared_ptr<T> value) -> task<T> {
-            co_await ex::suspend_always{};
-            return *(value.get());
-        }(std::move(result));
-        _base.insert_after(&t._coro.promise());
-        return std::move(t);
     }
 
     bool resume() {
@@ -205,7 +199,6 @@ class promise_handle {
         }
         return false;
     }
-    void operator()() { resume(); }
 
     void destroy() noexcept {
         if (_base.prev()) {
@@ -216,38 +209,56 @@ class promise_handle {
     ~promise_handle() noexcept { destroy(); }
 
     // refer to zero-cost impl https://gist.github.com/GorNishanov/65195f6e5620f70721597caf920d4dcc
-    // TODO remove shared_ptr for value.
     struct await_type {
         awaitable_tasks::promise_base handle;
-        std::shared_ptr<T> value;
-        await_type() = default;
+        T value;
         await_type(const await_type&) = delete;
         await_type& operator=(const await_type&) = delete;
-        await_type(await_type&&) noexcept = default;
-        await_type& operator=(await_type&&) noexcept = default;
+        await_type() { handle._data = &value; }
+        await_type(await_type&& rhs) : value(std::move(rhs.value)), handle(std::move(rhs.handle)) {
+            rhs.handle._data = nullptr;
+            handle._data = &value;
+        }
+        await_type& operator=(await_type&& rhs) noexcept {
+            if (this != std::addressof(rhs)) {
+                value = std::move(rhs.value);
+                handle = std::move(rhs.handle);
+                handle._data = &value;
+                rhs.handle._data = nullptr;
+            }
+            return *this;
+        }
 
         bool await_ready() { return false; }
         template<typename P>
         void await_suspend(awaitable_tasks::coroutine<P> caller_coro) {
             caller_coro.promise().insert_before(handle.next());
+            caller_coro.promise()._data = handle._data;
             handle.remove_from_list();
+            handle._coro = caller_coro;
         }
-        T await_resume() { return std::move(*value.get()); }
+        auto await_resume() {
+//             auto coro = static_cast<coroutine<task<T>::promise_type>*>(&handle._coro);
+//             coro->promise().throw_if_exception();
+            return value;
+        }
     };
 
     await_type make_awaiter() {
         await_type await_obj;
-        await_obj.value = _result;
         await_obj.handle.insert_before(&_base);
         return std::move(await_obj);
     }
 
-    promise_base& get_base() { return _base; }
-    auto get_result() { return _result; }
+    auto get_task() {
+        auto t = [](await_type awaiter) -> task<T> {
+            return co_await awaiter;
+        }(std::move(make_awaiter()));
+        return std::move(t);
+    }
 
   protected:
     promise_base _base;
-    std::shared_ptr<T> _result;
 };
 
 template<typename T>
@@ -519,6 +530,7 @@ class task_holder {
 
 #pragma region task helpers
 // when_all range
+#include <memory>
 #include <vector>
 namespace awaitable_tasks {
 namespace detail {
