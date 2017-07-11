@@ -2,6 +2,12 @@
 #include <experimental/resumable>
 #include <cassert>
 
+#define AWAIT_TASKS_TRACE_COROUTINE
+#ifdef AWAIT_TASKS_TRACE_COROUTINE
+#define AWAITABLE_TASKS_TRACE(fmt, ...) printf("\n" fmt "\n", ##__VA_ARGS__)
+__declspec(selectany) uint32_t g_frame_count = 0;
+#endif
+
 #define AWAITABLE_TASKS_VARIANT_MPARK
 #if defined(AWAITABLE_TASKS_VARIANT_MPARK)
 #include "mpark/include/mpark/variant.hpp"
@@ -173,7 +179,7 @@ struct promise_base {
 };
 
 template<typename T>
-class promise_handle {
+class promise_handle : public promise_base {
   public:
     promise_handle() {}
     promise_handle(const promise_handle& rhs) = delete;
@@ -182,18 +188,18 @@ class promise_handle {
     promise_handle& operator=(promise_handle&& rhs) noexcept = default;
     template<typename U>
     void set_value(U&& value) {
-        *reinterpret_cast<T*>(_base.prev()->_data) = std::forward<U>(value);
+        *reinterpret_cast<T*>(prev()->_data) = std::forward<U>(value);
         resume();
     }
     void set_exception(std::exception_ptr eptr) {
-        auto coro = static_cast<coroutine<task<T>::promise_type>*>(&_base.prev()->_coro);
+        auto coro = static_cast<coroutine<task<T>::promise_type>*>(&prev()->_coro);
         coro->promise().set_eptr(std::move(eptr));
         resume();
     }
 
     bool resume() {
-        if (promise_base::is_resumable(_base.prev())) {
-            _base.prev()->_coro.resume();
+        if (promise_base::is_resumable(prev())) {
+            prev()->_coro.resume();
             destroy();
             return true;
         }
@@ -201,9 +207,9 @@ class promise_handle {
     }
 
     void destroy() noexcept {
-        if (_base.prev()) {
-            promise_base::destroy_chain(_base.prev(), false);
-            _base.reset();
+        if (prev()) {
+            promise_base::destroy_chain(prev(), false);
+            reset();
         }
     }
     ~promise_handle() noexcept { destroy(); }
@@ -246,7 +252,7 @@ class promise_handle {
 
     await_type make_awaiter() {
         await_type await_obj;
-        await_obj.handle.insert_before(&_base);
+        await_obj.handle.insert_before(this);
         return std::move(await_obj);
     }
 
@@ -256,9 +262,6 @@ class promise_handle {
         }(std::move(make_awaiter()));
         return std::move(t);
     }
-
-  protected:
-    promise_base _base;
 };
 
 template<typename T>
@@ -318,6 +321,20 @@ class task {
 #else
         std::exception_ptr eptr_ = nullptr;
         result_type result_{};
+#endif
+#ifdef AWAIT_TASKS_TRACE_COROUTINE
+        using alloc_of_char_type = std::allocator<char>;
+        void* operator new(size_t size) {
+            alloc_of_char_type al;
+            auto ptr = al.allocate(size);
+            AWAITABLE_TASKS_TRACE("promise created %p %u", ptr, ++g_frame_count);
+            return ptr;
+        }
+        void operator delete(void* ptr, size_t size) noexcept {
+            alloc_of_char_type al;
+            AWAITABLE_TASKS_TRACE("promise destroy %p %u", ptr, --g_frame_count);
+            return al.deallocate(static_cast<char*>(ptr), size);
+        }
 #endif
     };
     bool await_ready() noexcept { return is_done_or_empty(); }

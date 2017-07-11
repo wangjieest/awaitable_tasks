@@ -194,38 +194,22 @@ template<typename T>
 class async_result<detail::promise_handler<T>> {
   public:
 // reduce task cout
-#define ASIO_TASK_ASYNC_AWIATABLE
-#ifdef ASIO_TASK_ASYNC_AWIATABLE
     typedef typename detail::promise_handler<T>::promise_type::await_type type;
-#else
-    // The initiating function will return a task.
-    typedef awaitable_tasks::task<typename detail::promise_handler<T>::result_type_t> type;
-#endif
     // Constructor creates a new promise for the async operation, and obtains the
     // corresponding task.
     explicit async_result(detail::promise_handler<T>& h) {
-#ifdef ASIO_TASK_ASYNC_AWIATABLE
-        _task = std::move(h._promise_handle.make_awaiter());
-#else
-        _task = std::move(h._promise_handle.get_task());
-#endif
+        _base.insert_before(&h._promise_handle);
     }
 
 // Obtain the task to be returned from the initiating function.
-#ifdef ASIO_TASK_ASYNC_AWIATABLE
     type get() {
-        return std::move(_task);
+        auto handle = reinterpret_cast<detail::promise_handler<T>::promise_type*>(_base.next());
+        _base.remove_from_list();
+        return std::move(handle->make_awaiter());
     }
-#else
-    type get() { return std::move(_task); }
-#endif
 
   private:
-#ifdef ASIO_TASK_ASYNC_AWIATABLE
-    type _task;
-#else
-    type _task;
-#endif
+      awaitable_tasks::promise_base _base;
 };
 
 // Handler type specialisation for zero arg.
