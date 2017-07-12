@@ -192,8 +192,8 @@ class promise_handle : public promise_base {
         resume();
     }
     void set_exception(std::exception_ptr eptr) {
-        auto coro = static_cast<coroutine<task<T>::promise_type>*>(&prev()->_coro);
-        coro->promise().set_eptr(std::move(eptr));
+        auto coro = static_cast<task<T>::coroutine_type&>(prev()->_coro);
+        coro.promise().set_eptr(std::move(eptr));
         resume();
     }
 
@@ -244,8 +244,8 @@ class promise_handle : public promise_base {
             handle._coro = caller_coro;
         }
         auto await_resume() {
-//             auto coro = static_cast<coroutine<task<T>::promise_type>*>(&handle._coro);
-//             coro->promise().throw_if_exception();
+            //             auto coro = static_cast<task<T>::coroutine_type&>(&handle._coro);
+            //             coro.promise().throw_if_exception();
             return value;
         }
     };
@@ -337,6 +337,7 @@ class task {
         }
 #endif
     };
+    using coroutine_type = coroutine<promise_type>;
     bool await_ready() noexcept { return is_done_or_empty(); }
     template<typename P>
     void await_suspend(coroutine<P> caller_coro) noexcept {
