@@ -92,7 +92,7 @@ int main() {
     {
         awaitable_tasks::promise_handle<int> old_task_handle;
         auto old_task = old_task_handle.get_task();
-        auto new_task = old_task.then(fund).then(printval);
+        old_task.then(fund).then(printval);
         old_task_handle.resume();
     }
     // then task_gen
@@ -111,20 +111,20 @@ int main() {
                 return 44;
             });
 
-        auto new_task = old_task.then(func2)
-                            .then([](int& v) -> short {
-                                std::cout << "get1 " << v << std::endl;
-                                return 33;
-                            })
-                            // [t = std::move(old_task2)]{ co_await t;}
-                            // would be an error
-                            .then([](short& v) -> awaitable_tasks::task<int> {
-                                std::cout << "get2 " << v << std::endl;
-                                // usually this drived async
-                                v = co_await static_task;
-                                std::cout << "get3 " << v << std::endl;
-                                return v;
-                            });
+        old_task.then(func2)
+            .then([](int& v) -> short {
+                std::cout << "get1 " << v << std::endl;
+                return 33;
+            })
+            // [t = std::move(old_task2)]{ co_await t;}
+            // would be an error
+            .then([](short& v) -> awaitable_tasks::task<int> {
+                std::cout << "get2 " << v << std::endl;
+                // usually this drived async
+                v = co_await static_task;
+                std::cout << "get3 " << v << std::endl;
+                return v;
+            });
         old_task_handle.resume();
         old_task2_handle.resume();
     }
@@ -135,7 +135,7 @@ int main() {
         awaitable_tasks::promise_handle<int> task_b_handle;
         awaitable_tasks::task<int> task_a = task_a_handle.get_task().then(func);
         awaitable_tasks::task<int> task_b = task_b_handle.get_task().then(fund);
-        auto new_task = awaitable_tasks::when_all(task_a, task_b).then([](std::tuple<int, int>&) {
+        awaitable_tasks::when_all(task_a, task_b).then([](std::tuple<int, int>&) {
             std::cout << "ok " << std::endl;
         });
         task_a_handle.resume();
@@ -177,10 +177,8 @@ int main() {
         tasks.emplace_back(task_handle_a.get_task().then(func));
         tasks.emplace_back(task_handle_b.get_task().then(func));
         tasks.emplace_back(task_handle_c.get_task().then(func));
-        auto new_task = awaitable_tasks::when_n(tasks.begin(), tasks.end(), tasks.size())
-                            .then([](std::vector<std::pair<size_t, int>>&) {
-                                std::cout << "ok " << std::endl;
-                            });
+        awaitable_tasks::when_n(tasks.begin(), tasks.end(), tasks.size())
+            .then([](std::vector<std::pair<size_t, int>>&) { std::cout << "ok " << std::endl; });
         task_handle_a.resume();
         task_handle_b.resume();
         task_handle_c.resume();
@@ -194,10 +192,8 @@ int main() {
         tasks.emplace_back(task_handle_a.get_task().then(func));
         tasks.emplace_back(task_handle_b.get_task().then(func));
         tasks.emplace_back(task_handle_c.get_task().then(func));
-        auto new_task = awaitable_tasks::when_n(tasks.begin(), tasks.end(), 2)
-                            .then([](std::vector<std::pair<size_t, int>>&) {
-                                std::cout << "ok " << std::endl;
-                            });
+        awaitable_tasks::when_n(tasks.begin(), tasks.end(), 2)
+            .then([](std::vector<std::pair<size_t, int>>&) { std::cout << "ok " << std::endl; });
         task_handle_a.resume();
         task_handle_b.resume();
         task_handle_c.resume();
@@ -211,11 +207,9 @@ int main() {
         tasks.emplace_back(task_handle_a.get_task().then(func));
         tasks.emplace_back(task_handle_b.get_task().then(func));
         tasks.emplace_back(task_handle_c.get_task().then(func));
-        auto new_task = awaitable_tasks::when_n(tasks.begin(), tasks.end(), 1)
-                            .then([](std::vector<std::pair<size_t, int>>& xx) {
-                                std::cout << "ok " << std::endl;
-                            })
-                            .then([]() { printf("ok"); });
+        awaitable_tasks::when_n(tasks.begin(), tasks.end(), 1)
+            .then([](std::vector<std::pair<size_t, int>>& xx) { std::cout << "ok " << std::endl; })
+            .then([]() { printf("ok"); });
         task_handle_a.resume();
         task_handle_b.resume();
         task_handle_c.resume();
@@ -245,15 +239,14 @@ int main() {
         tasks.emplace_back(task_handle_a.get_task().then(func));
         tasks.emplace_back(task_handle_b.get_task().then(func));
         tasks.emplace_back(task_handle_c.get_task().then(func));
-        auto new_task = awaitable_tasks::when_any(tasks.begin(), tasks.end())
-                            .then([](std::pair<size_t, int>& xx)
-                                      -> awaitable_tasks::task<std::pair<size_t, int>> {
-                                // will leak, do not use without promise_handle control
-                                co_await awaitable_tasks::ex::suspend_never{};
-                                std::cout << "ok " << std::endl;
-                                return xx;
-                            })
-                            .then([](std::pair<size_t, int>& t) {});
+        awaitable_tasks::when_any(tasks.begin(), tasks.end())
+            .then([](std::pair<size_t, int>& xx) -> awaitable_tasks::task<std::pair<size_t, int>> {
+                // will leak, do not use without promise_handle control
+                co_await awaitable_tasks::ex::suspend_never{};
+                std::cout << "ok " << std::endl;
+                return xx;
+            })
+            .then([](std::pair<size_t, int>& t) {});
         task_handle_a.resume();
         task_handle_b.resume();
         task_handle_c.resume();
