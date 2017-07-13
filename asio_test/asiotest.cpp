@@ -521,9 +521,8 @@ int main(int argc, char* argv[]) {
         //             io_service.run();
         //         }
         {
-            std::cout << "coroutine_request\n";
             asio::io_service io_service;
-            auto t = make_request_task(io_service, server, path);
+            make_request_task(io_service, server, path);
             io_service.run();
         }
     } catch (std::exception& e) {
