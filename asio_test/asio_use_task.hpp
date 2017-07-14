@@ -205,7 +205,7 @@ class async_result<detail::promise_handler<T>> {
     type get() {
         auto handle = reinterpret_cast<detail::promise_handler<T>::promise_type*>(_base.next());
         _base.remove_from_list();
-        return std::move(handle->make_awaiter());
+        return handle->make_awaiter();
     }
 
   private:
