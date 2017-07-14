@@ -253,7 +253,7 @@ class promise_handle : public promise_base {
     await_type make_awaiter() {
         await_type await_obj;
         await_obj.handle.insert_before(this);
-        return std::move(await_obj);
+        return await_obj;
     }
 
     auto get_task() {
