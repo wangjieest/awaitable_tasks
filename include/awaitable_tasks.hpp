@@ -260,7 +260,7 @@ class promise_handle : public promise_base {
         auto t = [](await_type awaiter) -> task<T> {
             return co_await awaiter;
         }(std::move(make_awaiter()));
-        return std::move(t);
+        return t;
     }
 };
 
