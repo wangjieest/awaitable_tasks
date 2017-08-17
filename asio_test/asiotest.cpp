@@ -220,9 +220,9 @@ int sync_request(asio::io_service& io_service, const std::string& server, const 
 }
 
 #if defined(ASIO_TASK_EXCEPTION)
-awaitable_tasks::task<asio::error_code> make_request_task(asio::io_service& io_service,
-                                            const std::string& server,
-                                            const std::string& path) {
+awaitable::task<asio::error_code> make_request_task(asio::io_service& io_service,
+                                    const std::string& server,
+                                    const std::string& path) {
     asio::error_code err;
     try {
         // Start an asynchronous resolve to translate the server and service names
@@ -307,9 +307,9 @@ awaitable_tasks::task<asio::error_code> make_request_task(asio::io_service& io_s
 }
 
 #elif defined(ASIO_TASK_VARIANT)
-awaitable_tasks::task<asio::error_code> make_request_task(asio::io_service& io_service,
-                                            const std::string& server,
-                                            const std::string& path) {
+awaitable::task<asio::error_code> make_request_task(asio::io_service& io_service,
+                                    const std::string& server,
+                                    const std::string& path) {
     asio::error_code err;
 
     // Start an asynchronous resolve to translate the server and service names
@@ -399,9 +399,9 @@ awaitable_tasks::task<asio::error_code> make_request_task(asio::io_service& io_s
     return err;
 }
 #else
-awaitable_tasks::task<asio::error_code> make_request_task(asio::io_service& io_service,
-                                            const std::string& server,
-                                            const std::string& path) {
+awaitable::task<asio::error_code> make_request_task(asio::io_service& io_service,
+                                    const std::string& server,
+                                    const std::string& path) {
     asio::error_code err;
     // Start an asynchronous resolve to translate the server and service names
     // into a list of endpoints.
@@ -495,7 +495,37 @@ awaitable_tasks::task<asio::error_code> make_request_task(asio::io_service& io_s
     return err;
 }
 #endif
+namespace awaitable {
+namespace detail {
+template<typename F, typename R>
+task<R> make_aysnc_task_impl(F&& func, std::false_type) {
+    promise_handle<R> ret;
+    rail::PushAsyncTask([ ret, func{std::forward<F>(func)} ] {
+        ret.set_value(func());
+        rail::GetAsyncTaskMgr().DelayExcute([ret(std::move(ret))] { ret.resume(); });
+    });
+    return ret.get_task();
+}
 
+template<typename F, typename R>
+task<detail::Unkown> make_aysnc_task_impl(F&& func, std::true_type) {
+    promise_handle<detail::Unkown> ret;
+    rail::PushAsyncTask([ ret, func{std::forward<F>(func)} ] {
+        func();
+        rail::GetAsyncTaskMgr().DelayExcute([ret{std::move(ret)}] { ret.resume(); });
+    });
+    return ret.get_task();
+}
+}
+
+template<typename F, typename R = std::result_of_t<std::declval(F)()>>
+auto make_aysnc_task(F&& func) {
+    return detail::make_aysnc_task_impl<F, R>(std::forward<F>(func),
+                                                std::conditional_t<std::is_same_v<void, R>,
+                                                        std::true_type,
+                                                        std::false_type>{});
+}
+}
 int main(int argc, char* argv[]) {
     try {
         auto server = "www.boost.org";

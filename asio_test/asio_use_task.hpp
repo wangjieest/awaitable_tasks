@@ -25,11 +25,8 @@
 #include "asio/handler_type.hpp"
 #include "asio/system_error.hpp"
 
-#if defined(NS_VARIANT)
 #define ASIO_TASK_VARIANT
-#else
 //#define ASIO_TASK_EXCEPTION
-#endif
 
 namespace asio {
 
@@ -100,7 +97,8 @@ class promise_handler {
 #else
     using result_type_t = std::tuple<asio::error_code, T>;
 #endif
-    using promise_type = awaitable_tasks::promise_handle<result_type_t>;
+
+    using promise_type = awaitable::promise_handle<result_type_t>;
     // Construct from use_task special value.
     template<typename Allocator>
     promise_handler(use_task_t<Allocator> /*uf*/) {}
@@ -143,7 +141,7 @@ template<>
 class promise_handler<void> {
   public:
     using result_type_t = asio::error_code;
-    using promise_type = awaitable_tasks::promise_handle<result_type_t>;
+    using promise_type = awaitable::promise_handle<result_type_t>;
 
     // Construct from use_task special value. Used during rebinding.
     template<typename Allocator>
@@ -193,23 +191,18 @@ void asio_handler_invoke(Function& f, promise_handler<T>* h) {
 template<typename T>
 class async_result<detail::promise_handler<T>> {
   public:
-// reduce task cout
+    typedef typename detail::promise_handler<T>::promise_type promise_handle;
     typedef typename detail::promise_handler<T>::promise_type::await_type type;
+
     // Constructor creates a new promise for the async operation, and obtains the
     // corresponding task.
-    explicit async_result(detail::promise_handler<T>& h) {
-        _base.insert_before(&h._promise_handle);
-    }
+    explicit async_result(detail::promise_handler<T>& h) : _handle(h._promise_handle) {}
 
-// Obtain the task to be returned from the initiating function.
-    type get() {
-        auto handle = reinterpret_cast<detail::promise_handler<T>::promise_type*>(_base.next());
-        _base.remove_from_list();
-        return handle->make_awaiter();
-    }
+    // Obtain the task to be returned from the initiating function.
+    type get() { return _handle.get_awaitable(); }
 
   private:
-      awaitable_tasks::promise_base _base;
+    promise_handle _handle;
 };
 
 // Handler type specialisation for zero arg.
