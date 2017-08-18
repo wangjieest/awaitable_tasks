@@ -5,6 +5,12 @@
 #include <memory>
 #include <experimental/resumable>
 
+#define AWAITABLE_TASKS_TRACE_COROUTINE
+#ifdef AWAITABLE_TASKS_TRACE_COROUTINE
+#define AWAITABLE_TASKS_TRACE(fmt, ...) printf("\n" fmt "\n", ##__VA_ARGS__)
+__declspec(selectany) uint32_t g_frame_count = 0;
+#endif
+
 #if !defined(_HAS_CXX17) || !_HAS_CXX17
 #include "mpark/variant.hpp"
 #define NS_VARIANT mpark
@@ -216,13 +222,11 @@ class promise_handle {
     void set_value(U&& value) {
         if (_state) {
             _state->value = std::forward<U>(value);
-            resume();
         }
     }
     void set_exception(std::exception_ptr eptr) {
         if (_state) {
             _state->value = eptr;
-            resume();
         }
     }
     bool resume() {
@@ -299,6 +303,20 @@ class task {
 
         auto& get_result() noexcept { return result_; }
         NS_VARIANT::variant<detail::mono_state_t, result_type, std::exception_ptr> result_;
+#ifdef AWAITABLE_TASKS_TRACE_COROUTINE
+        using alloc_of_char_type = std::allocator<char>;
+        void* operator new(size_t size) {
+            alloc_of_char_type al;
+            auto ptr = al.allocate(size);
+            AWAITABLE_TASKS_TRACE("promise created %p %u", ptr, ++g_frame_count);
+            return ptr;
+        }
+        void operator delete(void* ptr, size_t size) noexcept {
+            alloc_of_char_type al;
+            AWAITABLE_TASKS_TRACE("promise destroy %p %u", ptr, --g_frame_count);
+            return al.deallocate(static_cast<char*>(ptr), size);
+        }
+#endif
     };
     using coroutine_type = coroutine<promise_type>;
 
@@ -406,7 +424,7 @@ class task {
     template<typename F, typename R, typename... Args>
     std::enable_if_t<sizeof...(Args) == 0 && R::is_task &&
                          (std::is_same_v<typename R::OrignalRet, detail::Unkown> ||
-                             std::is_same_v<typename R::OrignalRet, void>),
+                             std::is_void_v<typename R::OrignalRet>),
             task>
     then_impl(F&& func, detail::callable_traits<F(Args...)>) noexcept {
         auto next_task = [](task t, std::decay_t<F> f) -> task {
@@ -420,7 +438,7 @@ class task {
     template<typename F, typename R, typename... Args>
     std::enable_if_t<sizeof...(Args) == 0 && R::is_task &&
                          (!std::is_same_v<typename R::OrignalRet, detail::Unkown> &&
-                             !std::is_same_v<typename R::OrignalRet, void>),
+                             !std::is_void_v<typename R::OrignalRet>),
             typename R::TaskReturn>
     then_impl(F&& func, detail::callable_traits<F(Args...)>) noexcept {
         auto next_task = [](task t, std::decay_t<F> f) -> typename R::TaskReturn {
@@ -435,8 +453,7 @@ class task {
 #endif
     // then continue function
     template<typename F, typename R, typename... Args>
-    std::enable_if_t<sizeof...(Args) == 1 && !R::is_task &&
-                         std::is_same_v<typename R::OrignalRet, void>,
+    std::enable_if_t<sizeof...(Args) == 1 && !R::is_task && std::is_void_v<typename R::OrignalRet>,
             task>
     then_impl(F&& func, detail::callable_traits<F(Args...)>) noexcept {
         auto next_task = [](task t, std::decay_t<F> f) -> task {
@@ -448,8 +465,7 @@ class task {
     }
 
     template<typename F, typename R, typename... Args>
-    std::enable_if_t<sizeof...(Args) == 1 && !R::is_task &&
-                         !std::is_same_v<typename R::OrignalRet, void>,
+    std::enable_if_t<sizeof...(Args) == 1 && !R::is_task && !std::is_void_v<typename R::OrignalRet>,
             typename R::TaskReturn>
     then_impl(F&& func, detail::callable_traits<F(Args...)>) noexcept {
         auto next_task = [](task t, std::decay_t<F> f) -> typename R::TaskReturn {
@@ -461,8 +477,7 @@ class task {
     }
 
     template<typename F, typename R, typename... Args>
-    std::enable_if_t<sizeof...(Args) == 0 && !R::is_task &&
-                         std::is_same_v<typename R::OrignalRet, void>,
+    std::enable_if_t<sizeof...(Args) == 0 && !R::is_task && std::is_void_v<typename R::OrignalRet>,
             task>
     then_impl(F&& func, detail::callable_traits<F(Args...)>) noexcept {
         auto next_task = [](task t, std::decay_t<F> f) -> typename task {
@@ -475,8 +490,7 @@ class task {
     }
 
     template<typename F, typename R, typename... Args>
-    std::enable_if_t<sizeof...(Args) == 0 && !R::is_task &&
-                         !std::is_same_v<typename R::OrignalRet, void>,
+    std::enable_if_t<sizeof...(Args) == 0 && !R::is_task && !std::is_void_v<typename R::OrignalRet>,
             typename R::TaskReturn>
     then_impl(F&& func, detail::callable_traits<F(Args...)>) noexcept {
         auto next_task = [](task t, std::decay_t<F> f) -> typename R::TaskReturn {

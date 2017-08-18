@@ -113,6 +113,7 @@ class promise_handler {
 #else
         _promise_handle.set_value(result_type_t(asio::error_code(), std::move(t)));
 #endif
+        _promise_handle.resume();
     }
     void operator()(const asio::error_code& ec, T t) {
 #if defined(ASIO_TASK_VARIANT)
@@ -130,6 +131,7 @@ class promise_handler {
 #else
         _promise_handle.set_value(result_type_t(ec, std::move(t)));
 #endif
+        _promise_handle.resume();
     }
 
     // private:
@@ -162,6 +164,7 @@ class promise_handler<void> {
 #else
         _promise_handle.set_value(std::move(ec));
 #endif
+        _promise_handle.resume();
     }
 
     // private:
